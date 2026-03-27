@@ -88,19 +88,19 @@ export class ClaudeWatcher implements vscode.Disposable {
     });
   }
 
-  async processFile(filePath: string): Promise<void> {
+  async processFile(filePath: string, manual = false): Promise<void> {
     if (this.inFlight.has(filePath)) return;
     if (!this.config.isValid()) return;
 
     this.inFlight.add(filePath);
     try {
-      await this._processFile(filePath);
+      await this._processFile(filePath, manual);
     } finally {
       this.inFlight.delete(filePath);
     }
   }
 
-  private async _processFile(filePath: string): Promise<void> {
+  private async _processFile(filePath: string, manual = false): Promise<void> {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(filePath);
@@ -108,7 +108,12 @@ export class ClaudeWatcher implements vscode.Disposable {
       return;
     }
 
-    if (!this.state.shouldProcess(filePath, stat.mtimeMs)) return;
+    if (!this.state.shouldProcess(filePath, stat.mtimeMs)) {
+      if (manual) {
+        vscode.window.showInformationMessage('SecondBrain: 변경된 내용이 없습니다.');
+      }
+      return;
+    }
 
     this.statusBar.setProcessing();
 
@@ -116,6 +121,9 @@ export class ClaudeWatcher implements vscode.Disposable {
       const session = this.parser.parse(filePath);
       if (!session) {
         this.statusBar.setIdle();
+        if (manual) {
+          vscode.window.showWarningMessage('SecondBrain: 대화 파일을 파싱할 수 없습니다.');
+        }
         return;
       }
 
@@ -126,6 +134,11 @@ export class ClaudeWatcher implements vscode.Disposable {
       // Guard: minimum new messages
       if (newMessages.length < this.config.minMessages) {
         this.statusBar.setIdle();
+        if (manual) {
+          vscode.window.showInformationMessage(
+            `SecondBrain: 메시지가 너무 적습니다 (${newMessages.length}개, 최소 ${this.config.minMessages}개 필요).`
+          );
+        }
         return;
       }
 
@@ -218,7 +231,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     );
 
     this.state.resetEntry(latest);
-    await this.processFile(latest);
+    await this.processFile(latest, true);
   }
 
   dispose(): void {
