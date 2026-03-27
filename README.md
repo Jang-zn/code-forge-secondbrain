@@ -128,3 +128,11 @@ src/
 - **1MB+ JSONL**: 첫 3 + 마지막 7 exchanges 유지, 60,000자 상한
 - **대화 이어서 진행**: mtime 비교로 재처리 + 노트 덮어쓰기
 - **노트 제목 충돌**: `{date}-{title}-{sessionId[0:8]}.md`
+
+## Windows 호환성
+
+macOS/Linux와 동일하게 동작합니다.
+
+- `os.homedir()` 기반 경로 처리 — `C:\Users\username\.claude\projects` 자동 인식
+- chokidar glob 패턴 슬래시 정규화 (`\` → `/`)
+- 경로 비교 시 대소문자 무감각 처리 (`C:\Users` vs `c:\users`)
