@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { FileLock } from './FileLock';
 
 interface StateEntry {
   mtime: number;
@@ -14,20 +15,23 @@ interface StateData {
   entries: Record<string, StateEntry>; // key = filePath
 }
 
+const STATE_LOCK_KEY = path.join(os.homedir(), '.vsc-secondbrain', '__state_lock__');
+
 export class ProcessedState {
   private stateDir: string;
   private stateFile: string;
   private data: StateData;
+  private stateLock = new FileLock();
 
   constructor() {
     this.stateDir = path.join(os.homedir(), '.vsc-secondbrain');
+    fs.mkdirSync(this.stateDir, { recursive: true });
     this.stateFile = path.join(this.stateDir, 'state.json');
     this.data = this.load();
   }
 
   private load(): StateData {
     try {
-      fs.mkdirSync(this.stateDir, { recursive: true });
       const raw = fs.readFileSync(this.stateFile, 'utf-8');
       return JSON.parse(raw) as StateData;
     } catch {
@@ -46,6 +50,19 @@ export class ProcessedState {
     fs.renameSync(tmp, this.stateFile);
   }
 
+  private async withStateLock(mutate: (data: StateData) => void): Promise<void> {
+    const locked = await this.stateLock.acquire(STATE_LOCK_KEY, 5_000);
+    if (!locked) return; // Skip write rather than race without lock
+    try {
+      const fresh = this.load();
+      mutate(fresh);
+      this.data = fresh;
+      this.save();
+    } finally {
+      this.stateLock.release(STATE_LOCK_KEY);
+    }
+  }
+
   shouldProcess(filePath: string, mtime: number): boolean {
     const entry = this.data.entries[filePath];
     if (!entry) return true;
@@ -62,48 +79,46 @@ export class ProcessedState {
     return this.data.entries[filePath]?.noteFiles ?? [];
   }
 
-  markProcessed(filePath: string, mtime: number, messageCount: number, noteFiles: string[]): void {
-    const fresh = this.load();
-    fresh.entries[filePath] = {
-      mtime,
-      processedMessageCount: messageCount,
-      noteFiles,
-      processedAt: new Date().toISOString(),
-    };
-    this.data = fresh;
-    this.save();
+  async markProcessed(filePath: string, mtime: number, messageCount: number, noteFiles: string[]): Promise<void> {
+    await this.withStateLock(data => {
+      data.entries[filePath] = {
+        mtime,
+        processedMessageCount: messageCount,
+        noteFiles,
+        processedAt: new Date().toISOString(),
+      };
+    });
   }
 
   /** Seed multiple files at once with a single disk write (used at startup) */
-  seedFiles(entries: Array<{ filePath: string; mtime: number; messageCount: number }>): void {
+  async seedFiles(entries: Array<{ filePath: string; mtime: number; messageCount: number }>): Promise<void> {
     if (entries.length === 0) return;
-    const fresh = this.load();
-    for (const { filePath, mtime, messageCount } of entries) {
-      fresh.entries[filePath] = {
-        mtime,
-        processedMessageCount: messageCount,
-        noteFiles: [],
-        processedAt: new Date().toISOString(),
-      };
-    }
-    this.data = fresh;
-    this.save();
+    await this.withStateLock(data => {
+      for (const { filePath, mtime, messageCount } of entries) {
+        data.entries[filePath] = {
+          mtime,
+          processedMessageCount: messageCount,
+          noteFiles: [],
+          processedAt: new Date().toISOString(),
+        };
+      }
+    });
   }
 
-  resetEntry(filePath: string): void {
-    const fresh = this.load();
-    const entry = fresh.entries[filePath];
-    if (entry) {
-      entry.mtime = 0;
-      entry.processedMessageCount = 0;
-      this.data = fresh;
-      this.save();
-    }
+  async resetEntry(filePath: string): Promise<void> {
+    await this.withStateLock(data => {
+      const entry = data.entries[filePath];
+      if (entry) {
+        entry.mtime = 0;
+        entry.processedMessageCount = 0;
+      }
+    });
   }
 
-  clearAll(): void {
-    this.data = { version: 1, entries: {} };
-    this.save();
+  async clearAll(): Promise<void> {
+    await this.withStateLock(data => {
+      data.entries = {};
+    });
   }
 
   getAllEntries(): Record<string, StateEntry> {

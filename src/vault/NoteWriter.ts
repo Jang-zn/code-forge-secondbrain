@@ -20,7 +20,6 @@ export class NoteWriter {
     const dateStr = formatDate(session.firstTimestamp);
     const timeStr = formatTime(session.firstTimestamp);
     const safeTitle = slugify(summary.title);
-    const sessionSuffix = session.sessionId.slice(0, 8);
 
     const dir = path.join(vaultPath, targetFolder, projectName, dateStr);
     fs.mkdirSync(dir, { recursive: true });
@@ -38,22 +37,11 @@ export class NoteWriter {
       const fd = fs.openSync(primaryPath, 'wx');
       fs.writeFileSync(fd, content, 'utf-8');
       fs.closeSync(fd);
-      return primaryPath;
     } catch (err: any) {
       if (err.code !== 'EEXIST') throw err;
+      // Already exists (another instance wrote it) — return existing path
     }
-
-    // Fallback with session suffix — also O_EXCL to avoid cross-instance overwrite
-    const fallbackPath = path.join(dir, `${baseName}-${sessionSuffix}.md`);
-    try {
-      const fd = fs.openSync(fallbackPath, 'wx');
-      fs.writeFileSync(fd, content, 'utf-8');
-      fs.closeSync(fd);
-    } catch (err: any) {
-      if (err.code !== 'EEXIST') return fallbackPath;
-      throw err;
-    }
-    return fallbackPath;
+    return primaryPath;
   }
 
   private renderNote(opts: NoteWriteOptions, datetime: string): string {

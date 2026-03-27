@@ -40,7 +40,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     if (!fs.existsSync(watchPath)) return;
 
     // Pre-seed state with all existing files so fresh installs don't bulk-process history
-    this.initializeExistingFiles(watchPath);
+    this.initializeExistingFiles(watchPath).catch(() => {});
 
     // chokidar glob requires forward slashes even on Windows
     const globPattern = watchPath.replace(/\\/g, '/') + '/**/*.jsonl';
@@ -55,7 +55,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     this.watcher.on('change', (filePath) => this.onFileChange(filePath));
   }
 
-  private initializeExistingFiles(watchPath: string): void {
+  private async initializeExistingFiles(watchPath: string): Promise<void> {
     const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
     for (const filePath of findJsonlFiles(watchPath)) {
       let stat: fs.Stats;
@@ -64,7 +64,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       const session = this.parser.parse(filePath);
       toSeed.push({ filePath, mtime: stat.mtimeMs, messageCount: session?.messages.length ?? 0 });
     }
-    this.state.seedFiles(toSeed);
+    await this.state.seedFiles(toSeed);
   }
 
   private onFileAdd(newFilePath: string): void {
@@ -136,7 +136,14 @@ export class ClaudeWatcher implements vscode.Disposable {
       this.state.reload();
 
       if (forceReprocess) {
-        this.state.resetEntry(filePath);
+        await this.state.resetEntry(filePath);
+      }
+
+      // Re-stat after lock to avoid stale mtime from pre-lock read
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        return;
       }
 
       if (!this.state.shouldProcess(filePath, stat.mtimeMs)) {
@@ -187,6 +194,15 @@ export class ClaudeWatcher implements vscode.Disposable {
         const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
+        if (summaries.length === 0) {
+          await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, []);
+          this.statusBar.setIdle();
+          if (manual) {
+            vscode.window.showInformationMessage('SecondBrain: 문서화할 내용이 없는 대화입니다.');
+          }
+          return;
+        }
+
         await this.vaultIndex.refresh(this.config.vaultPath);
         const linkMatcher = new LinkMatcher(this.vaultIndex);
         const projectName = resolveProjectName(session);
@@ -206,7 +222,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           notePaths.push(notePath);
         }
 
-        this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
+        await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
 
         const firstTitle = summaries[0]?.title ?? 'Claude 대화';
         this.statusBar.setSuccess(firstTitle);

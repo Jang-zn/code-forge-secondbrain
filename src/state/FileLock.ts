@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 const LOCKS_DIR = path.join(os.homedir(), '.vsc-secondbrain', 'locks');
 const STALE_THRESHOLD_MS = 120_000;
 const RETRY_INTERVAL_MS = 200;
+const GRACE_PERIOD_MS = 5_000;
 
 interface LockMeta {
   pid: number;
@@ -24,20 +25,22 @@ export class FileLock {
   }
 
   async acquire(filePath: string, timeoutMs = 30_000): Promise<boolean> {
-    const lockDir = this.lockDirFor(filePath);
+    const lockFile = this.lockFileFor(filePath);
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
       try {
-        fs.mkdirSync(lockDir, { recursive: false });
-        this.writeMeta(lockDir);
-        this.heldLocks.add(lockDir);
+        const meta: LockMeta = { pid: process.pid, timestamp: Date.now() };
+        const fd = fs.openSync(lockFile, 'wx');
+        fs.writeFileSync(fd, JSON.stringify(meta), 'utf-8');
+        fs.closeSync(fd);
+        this.heldLocks.add(lockFile);
         return true;
       } catch (err: any) {
         if (err.code !== 'EEXIST') throw err;
 
-        if (this.isStale(lockDir)) {
-          fs.rmSync(lockDir, { recursive: true, force: true });
+        if (this.isStale(lockFile)) {
+          try { fs.unlinkSync(lockFile); } catch {}
           continue;
         }
 
@@ -51,49 +54,41 @@ export class FileLock {
   }
 
   release(filePath: string): void {
-    const lockDir = this.lockDirFor(filePath);
-    try {
-      fs.rmSync(lockDir, { recursive: true, force: true });
-    } catch {
-      // Already removed
-    }
-    this.heldLocks.delete(lockDir);
+    const lockFile = this.lockFileFor(filePath);
+    try { fs.unlinkSync(lockFile); } catch {}
+    this.heldLocks.delete(lockFile);
   }
 
   releaseAll(): void {
-    for (const lockDir of this.heldLocks) {
-      try {
-        fs.rmSync(lockDir, { recursive: true, force: true });
-      } catch {}
+    for (const lockFile of this.heldLocks) {
+      try { fs.unlinkSync(lockFile); } catch {}
     }
     this.heldLocks.clear();
   }
 
-  private lockDirFor(filePath: string): string {
+  private lockFileFor(filePath: string): string {
     const hash = crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16);
     return path.join(LOCKS_DIR, `${hash}.lock`);
   }
 
-  private writeMeta(lockDir: string): void {
-    const meta: LockMeta = { pid: process.pid, timestamp: Date.now() };
-    fs.writeFileSync(path.join(lockDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
-  }
-
-  private isStale(lockDir: string): boolean {
+  private isStale(lockFile: string): boolean {
     try {
-      const raw = fs.readFileSync(path.join(lockDir, 'meta.json'), 'utf-8');
-      const meta: LockMeta = JSON.parse(raw);
-
-      if (Date.now() - meta.timestamp > STALE_THRESHOLD_MS) return true;
-
-      try {
-        process.kill(meta.pid, 0);
-        return false;
-      } catch {
-        return true;
+      const raw = fs.readFileSync(lockFile, 'utf-8');
+      if (!raw.trim()) {
+        try {
+          return (Date.now() - fs.statSync(lockFile).ctimeMs) > GRACE_PERIOD_MS;
+        } catch {
+          return true;
+        }
       }
+      return this.isMetaStale(JSON.parse(raw));
     } catch {
       return true;
     }
+  }
+
+  private isMetaStale(meta: LockMeta): boolean {
+    if (Date.now() - meta.timestamp > STALE_THRESHOLD_MS) return true;
+    try { process.kill(meta.pid, 0); return false; } catch { return true; }
   }
 }
