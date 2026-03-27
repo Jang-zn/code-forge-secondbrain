@@ -14,7 +14,7 @@ export class Config {
   }
 
   get minMessages(): number {
-    return this.cfg.get<number>('minMessages') ?? 3;
+    return this.cfg.get<number>('minMessages') ?? 2;
   }
 
   get enabled(): boolean {

@@ -92,6 +92,7 @@ function extractUserText(content: string | RawContentBlock[]): string {
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === 'text') {
+      if (block.text.startsWith('<teammate-message')) continue;
       parts.push(block.text);
     }
     // Skip tool_result blocks

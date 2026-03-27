@@ -14,6 +14,11 @@ import type { Config, ApiKeyManager } from '../config';
 import type { StatusBar } from '../ui/StatusBar';
 
 const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
+const SUBAGENTS_PATH_SEGMENT = '/subagents/';
+
+function isSubagentFile(filePath: string): boolean {
+  return filePath.includes(SUBAGENTS_PATH_SEGMENT);
+}
 
 export class ClaudeWatcher implements vscode.Disposable {
   private watcher: chokidar.FSWatcher | null = null;
@@ -46,6 +51,7 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.watcher = chokidar.watch(globPattern, {
       ignoreInitial: true,
+      ignored: '**/subagents/**',
       awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
       persistent: true,
     });
@@ -59,7 +65,7 @@ export class ClaudeWatcher implements vscode.Disposable {
   private async initializeExistingFiles(watchPath: string): Promise<void> {
     const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
     const toProcess: string[] = [];
-    for (const filePath of findJsonlFiles(watchPath)) {
+    for (const filePath of findJsonlFiles(watchPath).filter(f => !isSubagentFile(f))) {
       let stat: fs.Stats;
       try { stat = fs.statSync(filePath); } catch { continue; }
       if (!this.state.hasEntry(filePath)) {
@@ -82,7 +88,7 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     // New file = new session started — add sibling files to dirty set for next slot
     const projectDir = path.dirname(newFilePath);
-    const siblings = findJsonlFiles(projectDir).filter(f => f !== newFilePath);
+    const siblings = findJsonlFiles(projectDir).filter(f => f !== newFilePath && !isSubagentFile(f));
     for (const sibling of siblings) {
       this.dirtyFiles.add(sibling);
     }
@@ -324,7 +330,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       searchDir = path.join(CLAUDE_PROJECTS_PATH, encoded);
     }
 
-    const files = findJsonlFiles(searchDir).filter(f => !f.includes('/subagents/'));
+    const files = findJsonlFiles(searchDir).filter(f => !isSubagentFile(f));
     if (files.length === 0) {
       vscode.window.showWarningMessage('SecondBrain: 대화 파일(.jsonl)이 없습니다.');
       return;
