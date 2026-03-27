@@ -13,10 +13,6 @@ export class Config {
     return this.cfg.get<string>('targetFolder') ?? 'claude-conversations';
   }
 
-  get debounceSeconds(): number {
-    return this.cfg.get<number>('debounceSeconds') ?? 1800;
-  }
-
   get minMessages(): number {
     return this.cfg.get<number>('minMessages') ?? 3;
   }

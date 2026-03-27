@@ -3,7 +3,6 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { DebounceQueue } from './DebounceQueue';
 import { JsonlParser } from '../parser/JsonlParser';
 import { ProcessedState } from '../state/ProcessedState';
 import { GeminiSummarizer } from '../summarizer/GeminiSummarizer';
@@ -18,7 +17,8 @@ const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
 
 export class ClaudeWatcher implements vscode.Disposable {
   private watcher: chokidar.FSWatcher | null = null;
-  private debounceQueue: DebounceQueue;
+  private dirtyFiles = new Set<string>();
+  private schedulerTimer: ReturnType<typeof setTimeout> | null = null;
   private parser = new JsonlParser();
   private state: ProcessedState;
   private vaultIndex = new VaultIndex();
@@ -32,7 +32,6 @@ export class ClaudeWatcher implements vscode.Disposable {
     private statusBar: StatusBar
   ) {
     this.state = new ProcessedState();
-    this.debounceQueue = new DebounceQueue(config.debounceSeconds * 1000);
   }
 
   start(): void {
@@ -53,6 +52,8 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.watcher.on('add', (filePath) => this.onFileAdd(filePath));
     this.watcher.on('change', (filePath) => this.onFileChange(filePath));
+
+    this.startScheduler();
   }
 
   private async initializeExistingFiles(watchPath: string): Promise<void> {
@@ -66,38 +67,50 @@ export class ClaudeWatcher implements vscode.Disposable {
         const session = this.parser.parse(filePath);
         toSeed.push({ filePath, mtime: stat.mtimeMs, messageCount: session?.messages.length ?? 0 });
       } else if (this.state.shouldProcess(filePath, stat.mtimeMs)) {
-        // Existing entry with changed mtime — queue for real processing
-        // (chokidar ignoreInitial:true won't fire events for these)
+        // Existing entry with changed mtime — queue as dirty for next scheduled slot
         toProcess.push(filePath);
       }
     }
     await this.state.seedFiles(toSeed);
     for (const filePath of toProcess) {
-      await this.processFile(filePath);
+      this.dirtyFiles.add(filePath);
     }
   }
 
   private onFileAdd(newFilePath: string): void {
     if (!this.config.enabled) return;
 
-    // New file = previous session ended — immediately process sibling files
+    // New file = new session started — add sibling files to dirty set for next slot
     const projectDir = path.dirname(newFilePath);
     const siblings = findJsonlFiles(projectDir).filter(f => f !== newFilePath);
     for (const sibling of siblings) {
-      this.debounceQueue.flush(sibling);
-      this.processFile(sibling).catch(() => {});
+      this.dirtyFiles.add(sibling);
     }
-
-    // Register new file with normal debounce
-    this.onFileChange(newFilePath);
+    this.dirtyFiles.add(newFilePath);
   }
 
   private onFileChange(filePath: string): void {
     if (!this.config.enabled) return;
+    this.dirtyFiles.add(filePath);
+  }
 
-    this.debounceQueue.enqueue(filePath, async () => {
+  private startScheduler(): void {
+    const schedule = () => {
+      const ms = msUntilNextSlot();
+      this.schedulerTimer = setTimeout(async () => {
+        await this.runScheduled();
+        schedule(); // 다음 슬롯 재귀 예약
+      }, ms);
+    };
+    schedule();
+  }
+
+  private async runScheduled(): Promise<void> {
+    const files = Array.from(this.dirtyFiles);
+    this.dirtyFiles.clear();
+    for (const filePath of files) {
       await this.processFile(filePath);
-    });
+    }
   }
 
   async processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
@@ -212,8 +225,17 @@ export class ClaudeWatcher implements vscode.Disposable {
           return;
         }
 
-        const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
-        const previousContext = loadPreviousContext(previousNoteFiles);
+        // Gather context: sibling pending sessions + previous notes from this file
+        const siblingPending = this.state.getPendingSiblingContext(filePath);
+        const previousNoteContext = loadPreviousContext(this.state.getPreviousNoteFiles(filePath));
+        const previousContext = [siblingPending, previousNoteContext].filter(Boolean).join('\n\n---\n\n') || undefined;
+
+        // Consume sibling pending contexts before processing
+        await this.state.clearSiblingPendingContext(filePath);
+
+        const conversationText = newMessages
+          .map((m, i) => `[${alreadyProcessed + i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
+          .join('\n\n');
 
         const sessionWithNewMessages = {
           ...session,
@@ -232,12 +254,23 @@ export class ClaudeWatcher implements vscode.Disposable {
           return;
         }
 
+        // All topics incomplete = review-only, defer note creation
+        const allIncomplete = summaries.every(s => s.incomplete);
+        if (allIncomplete) {
+          await this.state.markPending(filePath, stat.mtimeMs, conversationText);
+          this.statusBar.setIdle();
+          if (manual) {
+            vscode.window.showInformationMessage('SecondBrain: 검토 단계로 판단됨 — 다음 세션과 합쳐서 노트를 생성합니다.');
+          }
+          return;
+        }
+
         await this.vaultIndex.refresh(this.config.vaultPath);
         const linkMatcher = new LinkMatcher(this.vaultIndex);
         const projectName = resolveProjectName(session);
 
         const notePaths: string[] = [];
-        for (const summary of summaries) {
+        for (const summary of summaries.filter(s => !s.incomplete)) {
           const matchedLinks = linkMatcher.match(summary.keyTopics);
           const notePath = this.noteWriter.write({
             vaultPath: this.config.vaultPath,
@@ -253,11 +286,11 @@ export class ClaudeWatcher implements vscode.Disposable {
 
         await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
 
-        const firstTitle = summaries[0]?.title ?? 'Claude 대화';
+        const firstTitle = summaries.find(s => !s.incomplete)?.title ?? 'Claude 대화';
         this.statusBar.setSuccess(firstTitle);
 
-        const label = summaries.length > 1
-          ? `${summaries.length}개 주제로 저장됨`
+        const label = notePaths.length > 1
+          ? `${notePaths.length}개 주제로 저장됨`
           : `"${firstTitle}" saved to Obsidian`;
         const action = await vscode.window.showInformationMessage(
           `SecondBrain: ${label}`,
@@ -304,7 +337,8 @@ export class ClaudeWatcher implements vscode.Disposable {
       if (mtime > latestMtime) { latest = files[i]; latestMtime = mtime; }
     }
 
-    this.debounceQueue.flush(latest);
+    // Remove from dirty set so scheduler doesn't double-process
+    this.dirtyFiles.delete(latest);
 
     vscode.window.showInformationMessage(
       `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
@@ -314,10 +348,23 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.schedulerTimer) clearTimeout(this.schedulerTimer);
     this.fileLock.releaseAll();
     this.watcher?.close();
-    this.debounceQueue.dispose();
   }
+}
+
+/** Returns milliseconds until next :00, :20, or :40 slot */
+function msUntilNextSlot(): number {
+  const now = new Date();
+  const minutes = now.getMinutes();
+  const seconds = now.getSeconds();
+  const ms = now.getMilliseconds();
+  let targetMinute: number;
+  if (minutes < 20) targetMinute = 20;
+  else if (minutes < 40) targetMinute = 40;
+  else targetMinute = 60; // next hour :00
+  return (targetMinute - minutes) * 60_000 - seconds * 1000 - ms;
 }
 
 function resolveProjectName(session: { projectPath: string }): string {

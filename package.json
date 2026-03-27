@@ -50,11 +50,6 @@
           "default": "claude-conversations",
           "description": "Folder inside vault to save conversation notes"
         },
-        "secondbrain.debounceSeconds": {
-          "type": "number",
-          "default": 1800,
-          "description": "Seconds to wait after last file change before processing"
-        },
         "secondbrain.minMessages": {
           "type": "number",
           "default": 3,

@@ -8,6 +8,7 @@ interface StateEntry {
   processedMessageCount: number;
   noteFiles: string[];
   processedAt: string;
+  pendingContext?: string;
 }
 
 interface StateData {
@@ -121,6 +122,48 @@ export class ProcessedState {
           noteFiles: [],
           processedAt: new Date().toISOString(),
         };
+      }
+    });
+  }
+
+  /** Mark session as incomplete (review-only) — saves context for combining with next session */
+  async markPending(filePath: string, mtime: number, pendingContext: string): Promise<void> {
+    await this.withStateLock(data => {
+      const existing = data.entries[filePath];
+      data.entries[filePath] = {
+        mtime,
+        processedMessageCount: existing?.processedMessageCount ?? 0,
+        noteFiles: existing?.noteFiles ?? [],
+        processedAt: new Date().toISOString(),
+        pendingContext,
+      };
+    });
+  }
+
+  /** Returns combined pending context text from sibling sessions in same project directory */
+  getPendingSiblingContext(filePath: string): string | undefined {
+    const dir = path.dirname(filePath);
+    const parts: string[] = [];
+    for (const [entryPath, entry] of Object.entries(this.data.entries)) {
+      if (entryPath !== filePath && path.dirname(entryPath) === dir && entry.pendingContext) {
+        parts.push(entry.pendingContext);
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
+  }
+
+  /** Clear pending context for sibling sessions (after consuming them) */
+  async clearSiblingPendingContext(filePath: string): Promise<void> {
+    const dir = path.dirname(filePath);
+    const siblings = Object.keys(this.data.entries).filter(
+      p => p !== filePath && path.dirname(p) === dir && this.data.entries[p]?.pendingContext
+    );
+    if (siblings.length === 0) return;
+    await this.withStateLock(data => {
+      for (const sibling of siblings) {
+        if (data.entries[sibling]) {
+          delete data.entries[sibling].pendingContext;
+        }
       }
     });
   }
