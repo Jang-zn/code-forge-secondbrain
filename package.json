@@ -17,6 +17,10 @@
         "title": "SecondBrain: Set Gemini API Key"
       },
       {
+        "command": "secondbrain.setVaultPath",
+        "title": "SecondBrain: Set Vault Path"
+      },
+      {
         "command": "secondbrain.processAll",
         "title": "SecondBrain: Process All Existing Conversations"
       },
