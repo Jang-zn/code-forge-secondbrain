@@ -13,6 +13,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "secondbrain.setup",
+        "title": "SecondBrain: Setup (Vault + API Key)"
+      },
+      {
         "command": "secondbrain.setApiKey",
         "title": "SecondBrain: Set Gemini API Key"
       },

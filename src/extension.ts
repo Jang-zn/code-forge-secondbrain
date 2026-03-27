@@ -21,9 +21,37 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Commands
   context.subscriptions.push(
+    vscode.commands.registerCommand('secondbrain.setup', async () => {
+      // Step 1: Vault path
+      const uris = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Vault 폴더 선택',
+        title: '[1/2] Obsidian Vault 루트 폴더를 선택하세요',
+      });
+      if (!uris || uris.length === 0) return;
+      await config.setVaultPath(uris[0].fsPath);
+
+      // Step 2: Gemini API key
+      const key = await vscode.window.showInputBox({
+        prompt: '[2/2] Gemini API 키를 입력하세요',
+        password: true,
+        placeHolder: 'AIza...',
+        ignoreFocusOut: true,
+      });
+      if (key) {
+        await apiKeyManager.set(key);
+      }
+
+      vscode.window.showInformationMessage(
+        `SecondBrain: 설정 완료 — Vault: ${uris[0].fsPath}`
+      );
+    }),
+
     vscode.commands.registerCommand('secondbrain.setApiKey', async () => {
       const key = await vscode.window.showInputBox({
-        prompt: 'Enter your Gemini API key',
+        prompt: 'Gemini API 키를 입력하세요',
         password: true,
         placeHolder: 'AIza...',
         ignoreFocusOut: true,
