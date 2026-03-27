@@ -14,7 +14,8 @@ export function activate(context: vscode.ExtensionContext): void {
   watcher = new ClaudeWatcher(config, apiKeyManager, statusBar);
 
   if (config.enabled) {
-    watcher.start();
+    // Prompt for vault path if not set yet, then start
+    ensureVaultPath(config).then(() => watcher!.start());
   } else {
     statusBar.setDisabled();
   }
@@ -71,6 +72,32 @@ export function activate(context: vscode.ExtensionContext): void {
 
     watcher,
     statusBar,
+  );
+}
+
+async function ensureVaultPath(config: Config): Promise<void> {
+  if (config.vaultPath) return;
+
+  const pick = await vscode.window.showInformationMessage(
+    'SecondBrain: Obsidian vault 경로가 설정되지 않았습니다. 지금 선택하시겠습니까?',
+    'Vault 선택',
+    '나중에'
+  );
+  if (pick !== 'Vault 선택') return;
+
+  const uris = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Vault 폴더 선택',
+    title: 'Obsidian Vault 루트 폴더를 선택하세요',
+  });
+
+  if (!uris || uris.length === 0) return;
+
+  await config.setVaultPath(uris[0].fsPath);
+  vscode.window.showInformationMessage(
+    `SecondBrain: Vault 경로가 설정되었습니다 → ${uris[0].fsPath}`
   );
 }
 

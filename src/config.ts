@@ -33,6 +33,10 @@ export class Config {
     await this.cfg.update('enabled', value, vscode.ConfigurationTarget.Global);
   }
 
+  async setVaultPath(value: string): Promise<void> {
+    await this.cfg.update('vaultPath', value, vscode.ConfigurationTarget.Global);
+  }
+
   isValid(): boolean {
     return Boolean(this.vaultPath);
   }
