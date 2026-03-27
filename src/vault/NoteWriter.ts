@@ -105,7 +105,7 @@ export class NoteWriter {
       `# ${summary.title}`,
       '',
       '## Summary',
-      summary.summary,
+      formatSummary(summary.summary),
       '',
       '## Key Topics',
       keyTopicsSection,
@@ -152,4 +152,19 @@ function slugify(title: string): string {
 
 function escapeYaml(str: string): string {
   return str.replace(/"/g, '\\"');
+}
+
+// 이미 단락 구분이 있으면 그대로, 없으면 문장 3개마다 빈 줄 삽입
+function formatSummary(text: string): string {
+  if (!text) return text;
+  if (text.includes('\n\n')) return text;
+
+  // 문장 끝(. ! ?) 뒤에 공백이 오는 패턴을 기준으로 분리
+  const sentences = text.match(/[^.!?]+[.!?]+[\s]*/g) ?? [text];
+  const chunkSize = 3;
+  const chunks: string[] = [];
+  for (let i = 0; i < sentences.length; i += chunkSize) {
+    chunks.push(sentences.slice(i, i + chunkSize).join('').trimEnd());
+  }
+  return chunks.join('\n\n');
 }
