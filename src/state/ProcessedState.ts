@@ -33,7 +33,18 @@ export class ProcessedState {
   private load(): StateData {
     try {
       const raw = fs.readFileSync(this.stateFile, 'utf-8');
-      return JSON.parse(raw) as StateData;
+      const data = JSON.parse(raw) as StateData;
+      // Migrate old noteFile (string) → noteFiles (array) format
+      for (const entry of Object.values(data.entries)) {
+        const legacy = entry as any;
+        if (!Array.isArray(entry.noteFiles) && typeof legacy.noteFile === 'string') {
+          entry.noteFiles = [legacy.noteFile];
+          delete legacy.noteFile;
+        }
+        entry.noteFiles ??= [];
+        entry.processedMessageCount ??= 0;
+      }
+      return data;
     } catch {
       return { version: 1, entries: {} };
     }
@@ -63,6 +74,10 @@ export class ProcessedState {
     }
   }
 
+  hasEntry(filePath: string): boolean {
+    return filePath in this.data.entries;
+  }
+
   shouldProcess(filePath: string, mtime: number): boolean {
     const entry = this.data.entries[filePath];
     if (!entry) return true;
@@ -81,10 +96,13 @@ export class ProcessedState {
 
   async markProcessed(filePath: string, mtime: number, messageCount: number, noteFiles: string[]): Promise<void> {
     await this.withStateLock(data => {
+      const existing = data.entries[filePath];
+      const previousNotes = existing?.noteFiles ?? [];
+      const merged = [...new Set([...previousNotes, ...noteFiles])];
       data.entries[filePath] = {
         mtime,
         processedMessageCount: messageCount,
-        noteFiles,
+        noteFiles: merged,
         processedAt: new Date().toISOString(),
       };
     });
@@ -95,6 +113,8 @@ export class ProcessedState {
     if (entries.length === 0) return;
     await this.withStateLock(data => {
       for (const { filePath, mtime, messageCount } of entries) {
+        // Guard: don't overwrite if a concurrent processFile already wrote this entry
+        if (data.entries[filePath]) continue;
         data.entries[filePath] = {
           mtime,
           processedMessageCount: messageCount,
@@ -111,6 +131,7 @@ export class ProcessedState {
       if (entry) {
         entry.mtime = 0;
         entry.processedMessageCount = 0;
+        entry.noteFiles = [];
       }
     });
   }

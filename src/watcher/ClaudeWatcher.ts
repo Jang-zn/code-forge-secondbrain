@@ -57,14 +57,24 @@ export class ClaudeWatcher implements vscode.Disposable {
 
   private async initializeExistingFiles(watchPath: string): Promise<void> {
     const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
+    const toProcess: string[] = [];
     for (const filePath of findJsonlFiles(watchPath)) {
       let stat: fs.Stats;
       try { stat = fs.statSync(filePath); } catch { continue; }
-      if (!this.state.shouldProcess(filePath, stat.mtimeMs)) continue;
-      const session = this.parser.parse(filePath);
-      toSeed.push({ filePath, mtime: stat.mtimeMs, messageCount: session?.messages.length ?? 0 });
+      if (!this.state.hasEntry(filePath)) {
+        // New file with no state — seed to prevent bulk-processing on fresh install
+        const session = this.parser.parse(filePath);
+        toSeed.push({ filePath, mtime: stat.mtimeMs, messageCount: session?.messages.length ?? 0 });
+      } else if (this.state.shouldProcess(filePath, stat.mtimeMs)) {
+        // Existing entry with changed mtime — queue for real processing
+        // (chokidar ignoreInitial:true won't fire events for these)
+        toProcess.push(filePath);
+      }
     }
     await this.state.seedFiles(toSeed);
+    for (const filePath of toProcess) {
+      await this.processFile(filePath);
+    }
   }
 
   private onFileAdd(newFilePath: string): void {
@@ -91,7 +101,12 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   async processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
-    if (this.inFlight.has(filePath)) return;
+    if (this.inFlight.has(filePath)) {
+      if (manual) {
+        vscode.window.showInformationMessage('SecondBrain: 이미 처리 중입니다.');
+      }
+      return;
+    }
     if (!this.config.isValid()) {
       if (manual) {
         vscode.window.showWarningMessage('SecondBrain: Vault 경로가 설정되지 않았습니다. Setup 명령을 실행하세요.');
@@ -118,7 +133,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       return;
     }
 
-    if (!this.state.shouldProcess(filePath, stat.mtimeMs)) {
+    if (!forceReprocess && !this.state.shouldProcess(filePath, stat.mtimeMs)) {
       if (manual) {
         vscode.window.showInformationMessage('SecondBrain: 변경된 내용이 없습니다.');
       }
@@ -141,7 +156,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           const age = Date.now() - new Date(entry.processedAt).getTime();
           if (age < 30_000) {
             if (manual) {
-              vscode.window.showInformationMessage('SecondBrain: 이미 다른 창에서 처리되었습니다.');
+              vscode.window.showInformationMessage('SecondBrain: 최근에 이미 처리되었습니다.');
             }
             return;
           }
@@ -156,9 +171,9 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      if (!this.state.shouldProcess(filePath, stat.mtimeMs)) {
+      if (!forceReprocess && !this.state.shouldProcess(filePath, stat.mtimeMs)) {
         if (manual) {
-          vscode.window.showInformationMessage('SecondBrain: 이미 다른 창에서 처리되었습니다.');
+          vscode.window.showInformationMessage('SecondBrain: 최근에 이미 처리되었습니다.');
         }
         return;
       }
@@ -269,19 +284,27 @@ export class ClaudeWatcher implements vscode.Disposable {
       return;
     }
 
-    const files = findJsonlFiles(CLAUDE_PROJECTS_PATH);
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    let searchDir = CLAUDE_PROJECTS_PATH;
+    if (wsFolder) {
+      const encoded = wsFolder.uri.fsPath.replace(/\//g, '-');
+      searchDir = path.join(CLAUDE_PROJECTS_PATH, encoded);
+    }
+
+    const files = findJsonlFiles(searchDir).filter(f => !f.includes('/subagents/'));
     if (files.length === 0) {
       vscode.window.showWarningMessage('SecondBrain: 대화 파일(.jsonl)이 없습니다.');
       return;
     }
 
-    // Find most recently modified file — single pass to avoid repeated statSync
     let latest = files[0];
     let latestMtime = fs.statSync(latest).mtimeMs;
     for (let i = 1; i < files.length; i++) {
       const mtime = fs.statSync(files[i]).mtimeMs;
       if (mtime > latestMtime) { latest = files[i]; latestMtime = mtime; }
     }
+
+    this.debounceQueue.flush(latest);
 
     vscode.window.showInformationMessage(
       `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
