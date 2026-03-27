@@ -136,6 +136,16 @@ export class ClaudeWatcher implements vscode.Disposable {
       this.state.reload();
 
       if (forceReprocess) {
+        const entry = this.state.getAllEntries()[filePath];
+        if (entry?.processedAt) {
+          const age = Date.now() - new Date(entry.processedAt).getTime();
+          if (age < 30_000) {
+            if (manual) {
+              vscode.window.showInformationMessage('SecondBrain: 이미 다른 창에서 처리되었습니다.');
+            }
+            return;
+          }
+        }
         await this.state.resetEntry(filePath);
       }
 
