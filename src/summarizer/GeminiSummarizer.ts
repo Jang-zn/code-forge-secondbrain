@@ -49,12 +49,12 @@ ${conversationText}
       "summary": "이 주제에서 무엇을 했는지 5-10문장으로 요약 (한글로)",
       "keyTopics": ["vault 노트 링크용 구체적 기술/개념명, 최대 8개 (영문 기술명 그대로 사용)"],
       "decisions": ["이 주제에서 내린 결정 사항들을 상세하게 (한글로)"],
-      "codeChanges": ["수정/생성된 파일 및 변경 내용 요약 (한글로)"],
+      "codeChanges": ["수정/생성된 파일 및 변경 내용 요약 — 반드시 문자열로만, 예: 'src/foo.ts: 버그 수정' (한글로)"],
       "tags": ["작업 유형 분류 태그, 최대 5개 (예: 버그수정, 리팩토링, 설정, 기능추가, 학습자료)"]
     }
   ]
 }
-주제가 1개면 배열 요소 1개, 명확히 다른 주제가 2-3개 있으면 분리해서 각각 배열 요소로 만들어주세요.`;
+작업 단위 맥락으로 최대 5개 이내로 나누세요. 관련 작업은 하나로 묶고, 사소한 확인/중간 대화는 별도 주제로 분리하지 마세요. 대부분의 대화는 1-2개 주제면 충분합니다.`;
 
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(this.apiKey);
@@ -74,7 +74,9 @@ ${conversationText}
         summary: t.summary ?? '',
         keyTopics: Array.isArray(t.keyTopics) ? t.keyTopics : [],
         decisions: Array.isArray(t.decisions) ? t.decisions : [],
-        codeChanges: Array.isArray(t.codeChanges) ? t.codeChanges : [],
+        codeChanges: Array.isArray(t.codeChanges)
+          ? t.codeChanges.map((c: unknown) => typeof c === 'string' ? c : JSON.stringify(c))
+          : [],
         tags: Array.isArray(t.tags) ? t.tags : [],
       }));
     } catch {
