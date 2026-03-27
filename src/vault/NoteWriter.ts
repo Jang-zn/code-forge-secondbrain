@@ -17,7 +17,7 @@ export class NoteWriter {
   write(opts: NoteWriteOptions): string {
     const { vaultPath, targetFolder, projectName, session, summary, matchedLinks } = opts;
 
-    const datetime = formatDatetime(session.firstTimestamp); // YYYY-MM-DD-HHmm
+    const datetime = formatDatetime(new Date().toISOString()); // YYYY-MM-DD-HHmm (문서 생성 시점)
     const safeTitle = slugify(summary.title);
     const sessionSuffix = session.sessionId.slice(0, 8);
 
