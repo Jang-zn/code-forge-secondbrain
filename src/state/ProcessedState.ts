@@ -67,6 +67,19 @@ export class ProcessedState {
     this.save();
   }
 
+  /** Seed multiple files at once with a single disk write (used at startup) */
+  seedFiles(entries: Array<{ filePath: string; mtime: number; messageCount: number }>): void {
+    for (const { filePath, mtime, messageCount } of entries) {
+      this.data.entries[filePath] = {
+        mtime,
+        processedMessageCount: messageCount,
+        noteFiles: [],
+        processedAt: new Date().toISOString(),
+      };
+    }
+    if (entries.length > 0) this.save();
+  }
+
   clearAll(): void {
     this.data = { version: 1, entries: {} };
     this.save();

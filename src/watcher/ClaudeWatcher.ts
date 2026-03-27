@@ -34,6 +34,9 @@ export class ClaudeWatcher implements vscode.Disposable {
     const watchPath = path.join(os.homedir(), '.claude', 'projects');
     if (!fs.existsSync(watchPath)) return;
 
+    // Pre-seed state with all existing files so fresh installs don't bulk-process history
+    this.initializeExistingFiles(watchPath);
+
     // chokidar glob requires forward slashes even on Windows
     const globPattern = watchPath.replace(/\\/g, '/') + '/**/*.jsonl';
 
@@ -45,6 +48,18 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.watcher.on('add', (filePath) => this.onFileAdd(filePath));
     this.watcher.on('change', (filePath) => this.onFileChange(filePath));
+  }
+
+  private initializeExistingFiles(watchPath: string): void {
+    const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
+    for (const filePath of findJsonlFiles(watchPath)) {
+      let stat: fs.Stats;
+      try { stat = fs.statSync(filePath); } catch { continue; }
+      if (!this.state.shouldProcess(filePath, stat.mtimeMs)) continue;
+      const session = this.parser.parse(filePath);
+      toSeed.push({ filePath, mtime: stat.mtimeMs, messageCount: session?.messages.length ?? 0 });
+    }
+    this.state.seedFiles(toSeed);
   }
 
   private onFileAdd(newFilePath: string): void {

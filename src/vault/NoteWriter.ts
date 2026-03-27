@@ -17,15 +17,15 @@ export class NoteWriter {
   write(opts: NoteWriteOptions): string {
     const { vaultPath, targetFolder, projectName, session, summary, matchedLinks } = opts;
 
-    const datetime = formatDatetime(session.firstTimestamp); // YYYY-MM-DD-HHmm (대화 시작 시점)
+    const dateStr = formatDate(session.firstTimestamp);
+    const timeStr = formatTime(session.firstTimestamp);
     const safeTitle = slugify(summary.title);
     const sessionSuffix = session.sessionId.slice(0, 8);
 
-    // Resolve potential filename conflict
-    const dir = path.join(vaultPath, targetFolder, projectName);
+    const dir = path.join(vaultPath, targetFolder, projectName, dateStr);
     fs.mkdirSync(dir, { recursive: true });
 
-    const baseName = `${datetime}-${safeTitle}`;
+    const baseName = `${timeStr}-${safeTitle}`;
     let fileName = `${baseName}.md`;
     if (!opts.existingNotePath && fs.existsSync(path.join(dir, fileName))) {
       fileName = `${baseName}-${sessionSuffix}.md`;
@@ -33,7 +33,7 @@ export class NoteWriter {
 
     const notePath = opts.existingNotePath ?? path.join(dir, fileName);
 
-    const content = this.renderNote(opts, datetime);
+    const content = this.renderNote(opts, `${dateStr} ${timeStr}`);
     fs.writeFileSync(notePath, content, 'utf-8');
 
     return notePath;
@@ -117,15 +117,19 @@ export class NoteWriter {
   }
 }
 
-function formatDatetime(isoTimestamp: string): string {
-  // "2026-03-27T14:30:45.000Z" → "2026-03-27-1430"
+function formatDate(isoTimestamp: string): string {
   const d = new Date(isoTimestamp);
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatTime(isoTimestamp: string): string {
+  const d = new Date(isoTimestamp);
   const hh = String(d.getHours()).padStart(2, '0');
   const min = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}-${hh}${min}`;
+  return `${hh}-${min}`;
 }
 
 function slugify(title: string): string {
