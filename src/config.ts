@@ -14,7 +14,7 @@ export class Config {
   }
 
   get debounceSeconds(): number {
-    return this.cfg.get<number>('debounceSeconds') ?? 30;
+    return this.cfg.get<number>('debounceSeconds') ?? 600;
   }
 
   get minMessages(): number {

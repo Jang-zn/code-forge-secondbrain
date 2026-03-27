@@ -2,10 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ParsedSession, ParsedMessage, RawRecord, RawContentBlock, RawUserRecord, RawAssistantRecord } from './types';
 
-const MAX_CHARS = 60_000;
-const HEAD_EXCHANGES = 3;
-const TAIL_EXCHANGES = 7;
-
 export class JsonlParser {
   parse(filePath: string): ParsedSession | null {
     const stat = fs.statSync(filePath);
@@ -75,9 +71,6 @@ export class JsonlParser {
 
     if (!sessionId) return null;
 
-    // Truncate if too long
-    const trimmedMessages = truncateMessages(messages);
-
     return {
       sessionId,
       projectPath,
@@ -85,7 +78,7 @@ export class JsonlParser {
       slug,
       firstTimestamp,
       lastTimestamp,
-      messages: trimmedMessages,
+      messages,
       toolUses: Array.from(toolUsesSet),
       filePath,
       mtime: stat.mtimeMs,
@@ -126,30 +119,4 @@ function extractAssistantContent(content: RawContentBlock[]): { text: string; to
   if (!hasNonThinking) return { text: '', tools: [] };
 
   return { text: parts.join('\n').trim(), tools };
-}
-
-function truncateMessages(messages: ParsedMessage[]): ParsedMessage[] {
-  // Check total length
-  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
-  if (totalChars <= MAX_CHARS) return messages;
-
-  // Keep first HEAD and last TAIL exchanges (user+assistant pair = 1 exchange)
-  const exchanges: ParsedMessage[][] = [];
-  let i = 0;
-  while (i < messages.length) {
-    const exchange: ParsedMessage[] = [];
-    if (messages[i]?.role === 'user') exchange.push(messages[i++]);
-    if (messages[i]?.role === 'assistant') exchange.push(messages[i++]);
-    if (exchange.length > 0) exchanges.push(exchange);
-  }
-
-  const head = exchanges.slice(0, HEAD_EXCHANGES).flat();
-  const tail = exchanges.slice(-TAIL_EXCHANGES).flat();
-
-  const separator: ParsedMessage = {
-    role: 'user',
-    content: `[... ${exchanges.length - HEAD_EXCHANGES - TAIL_EXCHANGES} exchanges omitted ...]`,
-  };
-
-  return [...head, separator, ...tail];
 }

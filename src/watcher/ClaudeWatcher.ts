@@ -92,47 +92,46 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Summarize
+      // Summarize (returns array of topic summaries)
       const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
-      const summary = await summarizer.summarize(session);
+      const summaries = await summarizer.summarize(session);
 
-      // Match vault links
+      // Match vault links and write one note per topic
       await this.vaultIndex.refresh(this.config.vaultPath);
       const linkMatcher = new LinkMatcher(this.vaultIndex);
-      const matchedLinks = linkMatcher.match(summary.keyTopics);
-
-      // Determine project name
       const projectName = resolveProjectName(session);
 
-      // Existing note path (for updates)
-      const existingNotePath = this.state.getLastNoteFile(filePath);
-
-      // Write note
-      const notePath = this.noteWriter.write({
-        vaultPath: this.config.vaultPath,
-        targetFolder: this.config.targetFolder,
-        projectName,
-        session,
-        summary,
-        matchedLinks,
-        existingNotePath:
-          existingNotePath && fs.existsSync(existingNotePath)
-            ? existingNotePath
-            : undefined,
-      });
+      const notePaths: string[] = [];
+      for (const summary of summaries) {
+        const matchedLinks = linkMatcher.match(summary.keyTopics);
+        const notePath = this.noteWriter.write({
+          vaultPath: this.config.vaultPath,
+          targetFolder: this.config.targetFolder,
+          projectName,
+          session,
+          summary,
+          matchedLinks,
+          existingNotePath: undefined,
+        });
+        notePaths.push(notePath);
+      }
 
       // Mark as processed
-      this.state.markProcessed(filePath, stat.mtimeMs, notePath);
+      this.state.markProcessed(filePath, stat.mtimeMs, notePaths[0] ?? '');
 
-      this.statusBar.setSuccess(summary.title);
+      const firstTitle = summaries[0]?.title ?? 'Claude 대화';
+      this.statusBar.setSuccess(firstTitle);
 
       // Show notification with "Open Note" button
+      const label = summaries.length > 1
+        ? `${summaries.length}개 주제로 저장됨`
+        : `"${firstTitle}" saved to Obsidian`;
       const action = await vscode.window.showInformationMessage(
-        `SecondBrain: "${summary.title}" saved to Obsidian`,
+        `SecondBrain: ${label}`,
         'Open Note'
       );
       if (action === 'Open Note') {
-        const uri = vscode.Uri.file(notePath);
+        const uri = vscode.Uri.file(notePaths[0]);
         await vscode.commands.executeCommand('vscode.open', uri);
       }
     } catch (err) {

@@ -52,7 +52,7 @@
         },
         "secondbrain.debounceSeconds": {
           "type": "number",
-          "default": 30,
+          "default": 600,
           "description": "Seconds to wait after last file change before processing"
         },
         "secondbrain.minMessages": {

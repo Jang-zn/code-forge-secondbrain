@@ -13,8 +13,6 @@ export interface NoteWriteOptions {
   existingNotePath?: string;
 }
 
-const MAX_MESSAGE_CHARS = 800;
-
 export class NoteWriter {
   write(opts: NoteWriteOptions): string {
     const { vaultPath, targetFolder, projectName, session, summary, matchedLinks } = opts;
@@ -63,7 +61,10 @@ export class NoteWriter {
     // Key Topics section with wikilinks
     const keyTopicsSection = summary.keyTopics.length > 0
       ? summary.keyTopics.map(topic => {
-          const link = matchedLinks.find(l => l.toLowerCase() === topic.toLowerCase());
+          const link = matchedLinks.find(l =>
+            l.toLowerCase().includes(topic.toLowerCase()) ||
+            topic.toLowerCase().includes(l.toLowerCase())
+          );
           return link ? `- [[${link}]] - ${topic}` : `- ${topic}`;
         }).join('\n')
       : '_없음_';
@@ -83,13 +84,10 @@ export class NoteWriter {
       ? matchedLinks.map(l => `- [[${l}]]`).join('\n')
       : '_없음_';
 
-    // Full conversation (truncated messages)
+    // Full conversation
     const conversationLines = session.messages.map(m => {
       const role = m.role === 'user' ? '**User**' : '**Claude**';
-      const content = m.content.length > MAX_MESSAGE_CHARS
-        ? m.content.slice(0, MAX_MESSAGE_CHARS) + '…'
-        : m.content;
-      return `> ${role}: ${content.replace(/\n/g, '\n> ')}`;
+      return `> ${role}: ${m.content.replace(/\n/g, '\n> ')}`;
     });
 
     return [
