@@ -90,7 +90,12 @@ export class ClaudeWatcher implements vscode.Disposable {
 
   async processFile(filePath: string, manual = false): Promise<void> {
     if (this.inFlight.has(filePath)) return;
-    if (!this.config.isValid()) return;
+    if (!this.config.isValid()) {
+      if (manual) {
+        vscode.window.showWarningMessage('SecondBrain: Vault 경로가 설정되지 않았습니다. Setup 명령을 실행하세요.');
+      }
+      return;
+    }
 
     this.inFlight.add(filePath);
     try {
@@ -105,6 +110,9 @@ export class ClaudeWatcher implements vscode.Disposable {
     try {
       stat = fs.statSync(filePath);
     } catch {
+      if (manual) {
+        vscode.window.showWarningMessage('SecondBrain: 대화 파일을 읽을 수 없습니다.');
+      }
       return;
     }
 
@@ -127,11 +135,9 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Only process messages that haven't been processed yet
       const alreadyProcessed = this.state.getProcessedMessageCount(filePath);
       const newMessages = session.messages.slice(alreadyProcessed);
 
-      // Guard: minimum new messages
       if (newMessages.length < this.config.minMessages) {
         this.statusBar.setIdle();
         if (manual) {
@@ -142,7 +148,6 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Get API key
       const apiKey = await this.apiKeyManager.get();
       if (!apiKey) {
         vscode.window.showWarningMessage(
@@ -152,16 +157,13 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Load previous notes as context (strip Full Conversation section)
       const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
       const previousContext = loadPreviousContext(previousNoteFiles);
 
-      // Summarize only new messages, with previous context
       const sessionWithNewMessages = { ...session, messages: newMessages };
       const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
       const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
-      // Match vault links and write one note per topic
       await this.vaultIndex.refresh(this.config.vaultPath);
       const linkMatcher = new LinkMatcher(this.vaultIndex);
       const projectName = resolveProjectName(session);
