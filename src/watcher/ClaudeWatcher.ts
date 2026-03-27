@@ -13,6 +13,8 @@ import { NoteWriter } from '../vault/NoteWriter';
 import type { Config, ApiKeyManager } from '../config';
 import type { StatusBar } from '../ui/StatusBar';
 
+const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
+
 export class ClaudeWatcher implements vscode.Disposable {
   private watcher: chokidar.FSWatcher | null = null;
   private debounceQueue: DebounceQueue;
@@ -32,7 +34,7 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   start(): void {
-    const watchPath = path.join(os.homedir(), '.claude', 'projects');
+    const watchPath = CLAUDE_PROJECTS_PATH;
     if (!fs.existsSync(watchPath)) return;
 
     // Pre-seed state with all existing files so fresh installs don't bulk-process history
@@ -192,25 +194,30 @@ export class ClaudeWatcher implements vscode.Disposable {
 
   /** Process only the most recently modified JSONL file (current session) */
   async processCurrent(): Promise<void> {
-    const watchPath = path.join(os.homedir(), '.claude', 'projects');
-    if (!fs.existsSync(watchPath)) return;
-
-    const files = findJsonlFiles(watchPath);
-    if (files.length === 0) {
-      vscode.window.showWarningMessage('SecondBrain: No conversation files found.');
+    if (!fs.existsSync(CLAUDE_PROJECTS_PATH)) {
+      vscode.window.showWarningMessage('SecondBrain: ~/.claude/projects 폴더를 찾을 수 없습니다.');
       return;
     }
 
-    // Find most recently modified file
-    const latest = files.reduce((a, b) => {
-      return fs.statSync(a).mtimeMs > fs.statSync(b).mtimeMs ? a : b;
-    });
+    const files = findJsonlFiles(CLAUDE_PROJECTS_PATH);
+    if (files.length === 0) {
+      vscode.window.showWarningMessage('SecondBrain: 대화 파일(.jsonl)이 없습니다.');
+      return;
+    }
 
-    // Bypass mtime check so manual trigger always works
-    const stat = fs.statSync(latest);
-    const entry = (this.state as any).data?.entries?.[latest];
-    if (entry) entry.mtime = 0;
+    // Find most recently modified file — single pass to avoid repeated statSync
+    let latest = files[0];
+    let latestMtime = fs.statSync(latest).mtimeMs;
+    for (let i = 1; i < files.length; i++) {
+      const mtime = fs.statSync(files[i]).mtimeMs;
+      if (mtime > latestMtime) { latest = files[i]; latestMtime = mtime; }
+    }
 
+    vscode.window.showInformationMessage(
+      `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
+    );
+
+    this.state.resetEntry(latest);
     await this.processFile(latest);
   }
 
@@ -253,7 +260,7 @@ function findJsonlFiles(dir: string): string[] {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      const full = require('path').join(dir, entry.name);
+      const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         results.push(...findJsonlFiles(full));
       } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {

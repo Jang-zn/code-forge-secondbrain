@@ -80,6 +80,15 @@ export class ProcessedState {
     if (entries.length > 0) this.save();
   }
 
+  resetEntry(filePath: string): void {
+    const entry = this.data.entries[filePath];
+    if (entry) {
+      entry.mtime = 0;
+      entry.processedMessageCount = 0;
+      this.save();
+    }
+  }
+
   clearAll(): void {
     this.data = { version: 1, entries: {} };
     this.save();
