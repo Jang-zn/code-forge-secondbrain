@@ -17,7 +17,7 @@ export class NoteWriter {
   write(opts: NoteWriteOptions): string {
     const { vaultPath, targetFolder, projectName, session, summary, matchedLinks } = opts;
 
-    const date = session.firstTimestamp.slice(0, 10); // YYYY-MM-DD
+    const datetime = formatDatetime(session.firstTimestamp); // YYYY-MM-DD-HHmm
     const safeTitle = slugify(summary.title);
     const sessionSuffix = session.sessionId.slice(0, 8);
 
@@ -25,7 +25,7 @@ export class NoteWriter {
     const dir = path.join(vaultPath, targetFolder, projectName);
     fs.mkdirSync(dir, { recursive: true });
 
-    const baseName = `${date}-${safeTitle}`;
+    const baseName = `${datetime}-${safeTitle}`;
     let fileName = `${baseName}.md`;
     if (!opts.existingNotePath && fs.existsSync(path.join(dir, fileName))) {
       fileName = `${baseName}-${sessionSuffix}.md`;
@@ -33,13 +33,13 @@ export class NoteWriter {
 
     const notePath = opts.existingNotePath ?? path.join(dir, fileName);
 
-    const content = this.renderNote(opts, date);
+    const content = this.renderNote(opts, datetime);
     fs.writeFileSync(notePath, content, 'utf-8');
 
     return notePath;
   }
 
-  private renderNote(opts: NoteWriteOptions, date: string): string {
+  private renderNote(opts: NoteWriteOptions, datetime: string): string {
     const { projectName, session, summary, matchedLinks } = opts;
     const tags = ['claude', projectName.toLowerCase(), ...summary.tags].map(t =>
       t.replace(/\s+/g, '-').toLowerCase()
@@ -48,7 +48,7 @@ export class NoteWriter {
     const frontmatter = [
       '---',
       `title: "${escapeYaml(summary.title)}"`,
-      `date: ${date}`,
+      `date: ${datetime}`,
       `tags: [${tags.join(', ')}]`,
       `project: ${projectName}`,
       `session_id: ${session.sessionId}`,
@@ -115,6 +115,17 @@ export class NoteWriter {
       '',
     ].join('\n');
   }
+}
+
+function formatDatetime(isoTimestamp: string): string {
+  // "2026-03-27T14:30:45.000Z" → "2026-03-27-1430"
+  const d = new Date(isoTimestamp);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}-${hh}${min}`;
 }
 
 function slugify(title: string): string {
