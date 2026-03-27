@@ -35,6 +35,11 @@ export class ProcessedState {
     }
   }
 
+  /** Re-read state.json from disk to pick up writes from other instances */
+  reload(): void {
+    this.data = this.load();
+  }
+
   private save(): void {
     const tmp = this.stateFile + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf-8');
@@ -58,33 +63,40 @@ export class ProcessedState {
   }
 
   markProcessed(filePath: string, mtime: number, messageCount: number, noteFiles: string[]): void {
-    this.data.entries[filePath] = {
+    const fresh = this.load();
+    fresh.entries[filePath] = {
       mtime,
       processedMessageCount: messageCount,
       noteFiles,
       processedAt: new Date().toISOString(),
     };
+    this.data = fresh;
     this.save();
   }
 
   /** Seed multiple files at once with a single disk write (used at startup) */
   seedFiles(entries: Array<{ filePath: string; mtime: number; messageCount: number }>): void {
+    if (entries.length === 0) return;
+    const fresh = this.load();
     for (const { filePath, mtime, messageCount } of entries) {
-      this.data.entries[filePath] = {
+      fresh.entries[filePath] = {
         mtime,
         processedMessageCount: messageCount,
         noteFiles: [],
         processedAt: new Date().toISOString(),
       };
     }
-    if (entries.length > 0) this.save();
+    this.data = fresh;
+    this.save();
   }
 
   resetEntry(filePath: string): void {
-    const entry = this.data.entries[filePath];
+    const fresh = this.load();
+    const entry = fresh.entries[filePath];
     if (entry) {
       entry.mtime = 0;
       entry.processedMessageCount = 0;
+      this.data = fresh;
       this.save();
     }
   }

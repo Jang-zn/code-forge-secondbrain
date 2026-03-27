@@ -26,17 +26,34 @@ export class NoteWriter {
     fs.mkdirSync(dir, { recursive: true });
 
     const baseName = `${timeStr}-${safeTitle}`;
-    let fileName = `${baseName}.md`;
-    if (!opts.existingNotePath && fs.existsSync(path.join(dir, fileName))) {
-      fileName = `${baseName}-${sessionSuffix}.md`;
+    const content = this.renderNote(opts, `${dateStr} ${timeStr}`);
+
+    if (opts.existingNotePath) {
+      fs.writeFileSync(opts.existingNotePath, content, 'utf-8');
+      return opts.existingNotePath;
     }
 
-    const notePath = opts.existingNotePath ?? path.join(dir, fileName);
+    const primaryPath = path.join(dir, `${baseName}.md`);
+    try {
+      const fd = fs.openSync(primaryPath, 'wx');
+      fs.writeFileSync(fd, content, 'utf-8');
+      fs.closeSync(fd);
+      return primaryPath;
+    } catch (err: any) {
+      if (err.code !== 'EEXIST') throw err;
+    }
 
-    const content = this.renderNote(opts, `${dateStr} ${timeStr}`);
-    fs.writeFileSync(notePath, content, 'utf-8');
-
-    return notePath;
+    // Fallback with session suffix — also O_EXCL to avoid cross-instance overwrite
+    const fallbackPath = path.join(dir, `${baseName}-${sessionSuffix}.md`);
+    try {
+      const fd = fs.openSync(fallbackPath, 'wx');
+      fs.writeFileSync(fd, content, 'utf-8');
+      fs.closeSync(fd);
+    } catch (err: any) {
+      if (err.code !== 'EEXIST') return fallbackPath;
+      throw err;
+    }
+    return fallbackPath;
   }
 
   private renderNote(opts: NoteWriteOptions, datetime: string): string {

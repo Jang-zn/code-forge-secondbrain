@@ -10,6 +10,7 @@ import { GeminiSummarizer } from '../summarizer/GeminiSummarizer';
 import { VaultIndex } from '../vault/VaultIndex';
 import { LinkMatcher } from '../vault/LinkMatcher';
 import { NoteWriter } from '../vault/NoteWriter';
+import { FileLock } from '../state/FileLock';
 import type { Config, ApiKeyManager } from '../config';
 import type { StatusBar } from '../ui/StatusBar';
 
@@ -22,6 +23,7 @@ export class ClaudeWatcher implements vscode.Disposable {
   private state: ProcessedState;
   private vaultIndex = new VaultIndex();
   private noteWriter = new NoteWriter();
+  private fileLock = new FileLock();
   private inFlight = new Set<string>();
 
   constructor(
@@ -88,7 +90,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     });
   }
 
-  async processFile(filePath: string, manual = false): Promise<void> {
+  async processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
     if (this.inFlight.has(filePath)) return;
     if (!this.config.isValid()) {
       if (manual) {
@@ -99,13 +101,13 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.inFlight.add(filePath);
     try {
-      await this._processFile(filePath, manual);
+      await this._processFile(filePath, manual, forceReprocess);
     } finally {
       this.inFlight.delete(filePath);
     }
   }
 
-  private async _processFile(filePath: string, manual = false): Promise<void> {
+  private async _processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(filePath);
@@ -123,87 +125,110 @@ export class ClaudeWatcher implements vscode.Disposable {
       return;
     }
 
-    this.statusBar.setProcessing();
+    if (!(await this.fileLock.acquire(filePath))) {
+      if (manual) {
+        vscode.window.showInformationMessage('SecondBrain: 다른 창에서 처리 중입니다.');
+      }
+      return;
+    }
 
     try {
-      const session = this.parser.parse(filePath);
-      if (!session) {
-        this.statusBar.setIdle();
+      this.state.reload();
+
+      if (forceReprocess) {
+        this.state.resetEntry(filePath);
+      }
+
+      if (!this.state.shouldProcess(filePath, stat.mtimeMs)) {
         if (manual) {
-          vscode.window.showWarningMessage('SecondBrain: 대화 파일을 파싱할 수 없습니다.');
+          vscode.window.showInformationMessage('SecondBrain: 이미 다른 창에서 처리되었습니다.');
         }
         return;
       }
 
-      const alreadyProcessed = this.state.getProcessedMessageCount(filePath);
-      const newMessages = session.messages.slice(alreadyProcessed);
+      this.statusBar.setProcessing();
 
-      if (newMessages.length < this.config.minMessages) {
-        this.statusBar.setIdle();
-        if (manual) {
-          vscode.window.showInformationMessage(
-            `SecondBrain: 메시지가 너무 적습니다 (${newMessages.length}개, 최소 ${this.config.minMessages}개 필요).`
+      try {
+        const session = this.parser.parse(filePath);
+        if (!session) {
+          this.statusBar.setIdle();
+          if (manual) {
+            vscode.window.showWarningMessage('SecondBrain: 대화 파일을 파싱할 수 없습니다.');
+          }
+          return;
+        }
+
+        const alreadyProcessed = this.state.getProcessedMessageCount(filePath);
+        const newMessages = session.messages.slice(alreadyProcessed);
+
+        if (newMessages.length < this.config.minMessages) {
+          this.statusBar.setIdle();
+          if (manual) {
+            vscode.window.showInformationMessage(
+              `SecondBrain: 메시지가 너무 적습니다 (${newMessages.length}개, 최소 ${this.config.minMessages}개 필요).`
+            );
+          }
+          return;
+        }
+
+        const apiKey = await this.apiKeyManager.get();
+        if (!apiKey) {
+          vscode.window.showWarningMessage(
+            'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
           );
+          this.statusBar.setIdle();
+          return;
         }
-        return;
-      }
 
-      const apiKey = await this.apiKeyManager.get();
-      if (!apiKey) {
-        vscode.window.showWarningMessage(
-          'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
+        const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
+        const previousContext = loadPreviousContext(previousNoteFiles);
+
+        const sessionWithNewMessages = { ...session, messages: newMessages };
+        const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
+        const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
+
+        await this.vaultIndex.refresh(this.config.vaultPath);
+        const linkMatcher = new LinkMatcher(this.vaultIndex);
+        const projectName = resolveProjectName(session);
+
+        const notePaths: string[] = [];
+        for (const summary of summaries) {
+          const matchedLinks = linkMatcher.match(summary.keyTopics);
+          const notePath = this.noteWriter.write({
+            vaultPath: this.config.vaultPath,
+            targetFolder: this.config.targetFolder,
+            projectName,
+            session: sessionWithNewMessages,
+            summary,
+            matchedLinks,
+            existingNotePath: undefined,
+          });
+          notePaths.push(notePath);
+        }
+
+        this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
+
+        const firstTitle = summaries[0]?.title ?? 'Claude 대화';
+        this.statusBar.setSuccess(firstTitle);
+
+        const label = summaries.length > 1
+          ? `${summaries.length}개 주제로 저장됨`
+          : `"${firstTitle}" saved to Obsidian`;
+        const action = await vscode.window.showInformationMessage(
+          `SecondBrain: ${label}`,
+          'Open Note'
         );
-        this.statusBar.setIdle();
-        return;
+        if (action === 'Open Note') {
+          const uri = vscode.Uri.file(notePaths[0]);
+          await vscode.commands.executeCommand('vscode.open', uri);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.statusBar.setError(msg);
+        vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
       }
-
-      const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
-      const previousContext = loadPreviousContext(previousNoteFiles);
-
-      const sessionWithNewMessages = { ...session, messages: newMessages };
-      const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
-      const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
-
-      await this.vaultIndex.refresh(this.config.vaultPath);
-      const linkMatcher = new LinkMatcher(this.vaultIndex);
-      const projectName = resolveProjectName(session);
-
-      const notePaths: string[] = [];
-      for (const summary of summaries) {
-        const matchedLinks = linkMatcher.match(summary.keyTopics);
-        const notePath = this.noteWriter.write({
-          vaultPath: this.config.vaultPath,
-          targetFolder: this.config.targetFolder,
-          projectName,
-          session: sessionWithNewMessages,
-          summary,
-          matchedLinks,
-          existingNotePath: undefined,
-        });
-        notePaths.push(notePath);
-      }
-
-      // Mark as processed with total message count and note file paths
-      this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
-
-      const firstTitle = summaries[0]?.title ?? 'Claude 대화';
-      this.statusBar.setSuccess(firstTitle);
-
-      const label = summaries.length > 1
-        ? `${summaries.length}개 주제로 저장됨`
-        : `"${firstTitle}" saved to Obsidian`;
-      const action = await vscode.window.showInformationMessage(
-        `SecondBrain: ${label}`,
-        'Open Note'
-      );
-      if (action === 'Open Note') {
-        const uri = vscode.Uri.file(notePaths[0]);
-        await vscode.commands.executeCommand('vscode.open', uri);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.statusBar.setError(msg);
-      vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
+    } finally {
+      this.fileLock.release(filePath);
     }
   }
 
@@ -232,11 +257,11 @@ export class ClaudeWatcher implements vscode.Disposable {
       `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
     );
 
-    this.state.resetEntry(latest);
-    await this.processFile(latest, true);
+    await this.processFile(latest, true, true);
   }
 
   dispose(): void {
+    this.fileLock.releaseAll();
     this.watcher?.close();
     this.debounceQueue.dispose();
   }
