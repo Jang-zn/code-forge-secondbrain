@@ -84,8 +84,12 @@ export class NoteWriter {
       ? matchedLinks.map(l => `- [[${l}]]`).join('\n')
       : '_없음_';
 
-    // Full conversation
-    const conversationLines = session.messages.map(m => {
+    // Full conversation — filtered to indices assigned by summarizer
+    const indexSet = new Set(summary.messageIndices);
+    const filteredMessages = summary.messageIndices.length > 0
+      ? session.messages.filter((_, i) => indexSet.has(i))
+      : session.messages;
+    const conversationLines = filteredMessages.map(m => {
       const role = m.role === 'user' ? '**User**' : '**Claude**';
       return `> ${role}: ${m.content.replace(/\n/g, '\n> ')}`;
     });

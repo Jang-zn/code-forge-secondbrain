@@ -7,6 +7,7 @@ export interface SummaryResult {
   decisions: string[];
   codeChanges: string[];
   tags: string[];
+  messageIndices: number[];
 }
 
 export class GeminiSummarizer {
@@ -21,7 +22,7 @@ export class GeminiSummarizer {
 
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
     const conversationText = session.messages
-      .map(m => `${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
+      .map((m, i) => `[${i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
       .join('\n\n');
 
     const prompt = `다음은 Claude Code AI와의 대화입니다. 이 대화를 분석하여 Obsidian 노트용 구조화된 요약을 JSON 형식으로 반환하세요.
@@ -50,10 +51,12 @@ ${conversationText}
       "keyTopics": ["vault 노트 링크용 구체적 기술/개념명, 최대 8개 (영문 기술명 그대로 사용)"],
       "decisions": ["이 주제에서 내린 결정 사항들을 상세하게 (한글로)"],
       "codeChanges": ["수정/생성된 파일 및 변경 내용 요약 — 반드시 문자열로만, 예: 'src/foo.ts: 버그 수정' (한글로)"],
-      "tags": ["작업 유형 분류 태그, 최대 5개 (예: 버그수정, 리팩토링, 설정, 기능추가, 학습자료)"]
+      "tags": ["작업 유형 분류 태그, 최대 5개 (예: 버그수정, 리팩토링, 설정, 기능추가, 학습자료)"],
+      "messageIndices": [0, 1, 2]
     }
   ]
 }
+messageIndices는 이 주제에 해당하는 메시지의 인덱스 번호 배열입니다. 대화를 여러 주제로 분리할 경우 각 주제에 관련된 메시지 번호([0], [1], ... 앞에 붙은 숫자)를 할당하세요. 주제가 1개인 경우 모든 인덱스를 포함하세요.
 작업 단위 맥락으로 최대 5개 이내로 나누세요. 관련 작업은 하나로 묶고, 사소한 확인/중간 대화는 별도 주제로 분리하지 마세요. 대부분의 대화는 1-2개 주제면 충분합니다.`;
 
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
@@ -69,6 +72,7 @@ ${conversationText}
     try {
       const parsed = JSON.parse(jsonText) as { topics: SummaryResult[] };
       const topics = Array.isArray(parsed.topics) ? parsed.topics : [];
+      const allIndices = session.messages.map((_, i) => i);
       return topics.map(t => ({
         title: t.title ?? 'Claude 대화',
         summary: t.summary ?? '',
@@ -78,6 +82,9 @@ ${conversationText}
           ? t.codeChanges.map((c: unknown) => typeof c === 'string' ? c : JSON.stringify(c))
           : [],
         tags: Array.isArray(t.tags) ? t.tags : [],
+        messageIndices: Array.isArray(t.messageIndices) && t.messageIndices.length > 0
+          ? t.messageIndices
+          : allIndices,
       }));
     } catch {
       // Fallback if JSON parsing fails
@@ -88,6 +95,7 @@ ${conversationText}
         decisions: [],
         codeChanges: [],
         tags: ['claude'],
+        messageIndices: session.messages.map((_, i) => i),
       }];
     }
   }

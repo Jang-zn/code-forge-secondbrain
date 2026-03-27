@@ -20,6 +20,7 @@ export class ClaudeWatcher implements vscode.Disposable {
   private state: ProcessedState;
   private vaultIndex = new VaultIndex();
   private noteWriter = new NoteWriter();
+  private inFlight = new Set<string>();
 
   constructor(
     private config: Config,
@@ -86,8 +87,18 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   async processFile(filePath: string): Promise<void> {
+    if (this.inFlight.has(filePath)) return;
     if (!this.config.isValid()) return;
 
+    this.inFlight.add(filePath);
+    try {
+      await this._processFile(filePath);
+    } finally {
+      this.inFlight.delete(filePath);
+    }
+  }
+
+  private async _processFile(filePath: string): Promise<void> {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(filePath);
