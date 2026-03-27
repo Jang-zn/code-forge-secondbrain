@@ -100,6 +100,20 @@ git_branch: feat/parser
 > **Claude**: ...
 ```
 
+## 다중 창 동시성
+
+Cursor/VS Code 창을 여러 개 열어도 동일 대화에 대해 노트가 1개만 생성됩니다.
+
+- **파일 락**: `O_EXCL` 플래그를 사용한 원자적 파일 생성 방식으로 단일 인스턴스만 처리
+- **이중 검증**: 락 획득 후 state.json을 재조회하여 다른 인스턴스의 처리 완료 여부 확인
+- **state.json 락**: 서로 다른 파일을 동시 처리할 때 상태 파일의 lost update 방지
+- **노트 충돌 방어**: `O_EXCL` 파일 생성으로 동일 경로에 중복 쓰기 원천 차단
+
+## 스마트 필터링
+
+- 짧은 내부 대화(종료 명령, 단순 확인, 에이전트 내부 통신)는 문서화하지 않고 처리 완료로 마킹
+- Claude Code Teams(서브에이전트) 대화는 실제 팀 소통이 아닌 자동화 도구로 올바르게 인식
+
 ## 프로젝트 구조
 
 ```
@@ -110,13 +124,14 @@ src/
 │   ├── types.ts           # JSONL 타입 정의
 │   └── JsonlParser.ts     # JSONL 파싱, thinking/meta 필터, 60k자 truncate
 ├── state/
-│   └── ProcessedState.ts  # ~/.vsc-secondbrain/state.json (중복 처리 방지)
+│   ├── ProcessedState.ts  # ~/.vsc-secondbrain/state.json (중복 처리 방지)
+│   └── FileLock.ts        # O_EXCL 기반 크로스 인스턴스 파일 락
 ├── summarizer/
 │   └── GeminiSummarizer.ts  # Gemini 2.5 Flash Lite → 구조화된 JSON 요약
 ├── vault/
 │   ├── VaultIndex.ts      # vault .md 파일 인덱싱
 │   ├── LinkMatcher.ts     # keyTopics → [[wikilinks]] 매칭
-│   └── NoteWriter.ts      # 노트 렌더링 + 저장
+│   └── NoteWriter.ts      # 노트 렌더링 + O_EXCL 저장
 ├── watcher/
 │   ├── DebounceQueue.ts   # 파일별 디바운스 + concurrency:1
 │   └── ClaudeWatcher.ts   # chokidar 감시 + 파이프라인 조율
@@ -129,7 +144,7 @@ src/
 - **설치/업데이트 시 기존 파일**: 시작 시 전체 JSONL을 state에 pre-seed → 과거 대화 재전송 없음
 - **증분 처리**: mtime + 메시지 수 추적, 이전 대화 이후 새 메시지만 Gemini 전송
 - **세션 종료 감지**: 새 `.jsonl` 파일 생성 시 이전 세션 즉시 처리 (디바운스 bypass)
-- **노트 제목 충돌**: `{HH-MM}-{title}-{sessionId[0:8]}.md`
+- **stale 락 복구**: PID 생존 확인 + 120초 타임아웃으로 죽은 프로세스의 락 자동 해제
 
 ## Windows 호환성
 
