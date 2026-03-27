@@ -190,7 +190,11 @@ export class ClaudeWatcher implements vscode.Disposable {
         const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
         const previousContext = loadPreviousContext(previousNoteFiles);
 
-        const sessionWithNewMessages = { ...session, messages: newMessages };
+        const sessionWithNewMessages = {
+          ...session,
+          messages: newMessages,
+          firstTimestamp: newMessages[0]?.timestamp ?? session.firstTimestamp,
+        };
         const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 

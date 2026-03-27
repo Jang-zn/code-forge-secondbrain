@@ -57,14 +57,14 @@ export class JsonlParser {
 
         const text = extractUserText(ur.message.content);
         if (text) {
-          messages.push({ role: 'user', content: text });
+          messages.push({ role: 'user', content: text, timestamp: r.timestamp });
         }
       } else if (record.type === 'assistant') {
         const ar = record as RawAssistantRecord;
         const { text, tools } = extractAssistantContent(ar.message.content);
         for (const t of tools) toolUsesSet.add(t);
         if (text) {
-          messages.push({ role: 'assistant', content: text });
+          messages.push({ role: 'assistant', content: text, timestamp: r.timestamp });
         }
       }
     }

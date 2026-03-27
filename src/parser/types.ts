@@ -1,6 +1,7 @@
 export interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
+  timestamp?: string;
 }
 
 export interface ParsedSession {
