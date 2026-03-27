@@ -1,0 +1,195 @@
+import * as chokidar from 'chokidar';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as vscode from 'vscode';
+import { DebounceQueue } from './DebounceQueue';
+import { JsonlParser } from '../parser/JsonlParser';
+import { ProcessedState } from '../state/ProcessedState';
+import { GeminiSummarizer } from '../summarizer/GeminiSummarizer';
+import { VaultIndex } from '../vault/VaultIndex';
+import { LinkMatcher } from '../vault/LinkMatcher';
+import { NoteWriter } from '../vault/NoteWriter';
+import type { Config, ApiKeyManager } from '../config';
+import type { StatusBar } from '../ui/StatusBar';
+
+export class ClaudeWatcher implements vscode.Disposable {
+  private watcher: chokidar.FSWatcher | null = null;
+  private debounceQueue: DebounceQueue;
+  private parser = new JsonlParser();
+  private state: ProcessedState;
+  private vaultIndex = new VaultIndex();
+  private noteWriter = new NoteWriter();
+
+  constructor(
+    private config: Config,
+    private apiKeyManager: ApiKeyManager,
+    private statusBar: StatusBar
+  ) {
+    this.state = new ProcessedState();
+    this.debounceQueue = new DebounceQueue(config.debounceSeconds * 1000);
+  }
+
+  start(): void {
+    const watchPath = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(watchPath)) return;
+
+    this.watcher = chokidar.watch(path.join(watchPath, '**', '*.jsonl'), {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+      persistent: true,
+    });
+
+    this.watcher.on('add', (filePath) => this.onFileChange(filePath));
+    this.watcher.on('change', (filePath) => this.onFileChange(filePath));
+  }
+
+  private onFileChange(filePath: string): void {
+    if (!this.config.enabled) return;
+
+    this.debounceQueue.enqueue(filePath, async () => {
+      await this.processFile(filePath);
+    });
+  }
+
+  async processFile(filePath: string): Promise<void> {
+    if (!this.config.isValid()) return;
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      return;
+    }
+
+    if (!this.state.shouldProcess(filePath, stat.mtimeMs)) return;
+
+    this.statusBar.setProcessing();
+
+    try {
+      const session = this.parser.parse(filePath);
+      if (!session) {
+        this.statusBar.setIdle();
+        return;
+      }
+
+      // Guard: minimum messages
+      if (session.messages.length < this.config.minMessages) {
+        this.statusBar.setIdle();
+        return;
+      }
+
+      // Get API key
+      const apiKey = await this.apiKeyManager.get();
+      if (!apiKey) {
+        vscode.window.showWarningMessage(
+          'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
+        );
+        this.statusBar.setIdle();
+        return;
+      }
+
+      // Summarize
+      const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
+      const summary = await summarizer.summarize(session);
+
+      // Match vault links
+      await this.vaultIndex.refresh(this.config.vaultPath);
+      const linkMatcher = new LinkMatcher(this.vaultIndex);
+      const matchedLinks = linkMatcher.match(summary.keyTopics);
+
+      // Determine project name
+      const projectName = resolveProjectName(session);
+
+      // Existing note path (for updates)
+      const existingNotePath = this.state.getLastNoteFile(filePath);
+
+      // Write note
+      const notePath = this.noteWriter.write({
+        vaultPath: this.config.vaultPath,
+        targetFolder: this.config.targetFolder,
+        projectName,
+        session,
+        summary,
+        matchedLinks,
+        existingNotePath:
+          existingNotePath && fs.existsSync(existingNotePath)
+            ? existingNotePath
+            : undefined,
+      });
+
+      // Mark as processed
+      this.state.markProcessed(filePath, stat.mtimeMs, notePath);
+
+      this.statusBar.setSuccess(summary.title);
+
+      // Show notification with "Open Note" button
+      const action = await vscode.window.showInformationMessage(
+        `SecondBrain: "${summary.title}" saved to Obsidian`,
+        'Open Note'
+      );
+      if (action === 'Open Note') {
+        const uri = vscode.Uri.file(notePath);
+        await vscode.commands.executeCommand('vscode.open', uri);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.statusBar.setError(msg);
+      vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
+    }
+  }
+
+  async processAll(): Promise<void> {
+    const watchPath = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(watchPath)) return;
+
+    const files = findJsonlFiles(watchPath);
+    vscode.window.showInformationMessage(
+      `SecondBrain: Processing ${files.length} conversation files…`
+    );
+
+    for (const file of files) {
+      // Override shouldProcess check for processAll
+      const stat = fs.statSync(file);
+      this.state['data'] && delete (this.state as any)['data']['entries'][file];
+      await this.processFile(file);
+    }
+  }
+
+  dispose(): void {
+    this.watcher?.close();
+    this.debounceQueue.dispose();
+  }
+}
+
+function resolveProjectName(session: { projectPath: string }): string {
+  // Try workspace folder first
+  const wsFolder = vscode.workspace.workspaceFolders?.[0];
+  if (wsFolder) {
+    const wsPath = wsFolder.uri.fsPath;
+    // If session cwd matches workspace, use workspace name
+    if (session.projectPath.startsWith(wsPath)) {
+      return wsFolder.name;
+    }
+  }
+
+  // Fall back to basename of session projectPath
+  const { basename } = require('path');
+  return basename(session.projectPath) || 'unknown-project';
+}
+
+function findJsonlFiles(dir: string): string[] {
+  const results: string[] = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = require('path').join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findJsonlFiles(full));
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        results.push(full);
+      }
+    }
+  } catch {}
+  return results;
+}

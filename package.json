@@ -1,0 +1,85 @@
+{
+  "name": "vsc-secondbrain",
+  "displayName": "SecondBrain: Claude → Obsidian",
+  "description": "Automatically saves Claude Code conversations to your Obsidian vault",
+  "version": "0.1.0",
+  "publisher": "jang",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "secondbrain.setApiKey",
+        "title": "SecondBrain: Set Gemini API Key"
+      },
+      {
+        "command": "secondbrain.processAll",
+        "title": "SecondBrain: Process All Existing Conversations"
+      },
+      {
+        "command": "secondbrain.enable",
+        "title": "SecondBrain: Enable"
+      },
+      {
+        "command": "secondbrain.disable",
+        "title": "SecondBrain: Disable"
+      }
+    ],
+    "configuration": {
+      "title": "SecondBrain",
+      "properties": {
+        "secondbrain.vaultPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your Obsidian vault root directory"
+        },
+        "secondbrain.targetFolder": {
+          "type": "string",
+          "default": "5.Box/claude-conversations",
+          "description": "Folder inside vault to save conversation notes"
+        },
+        "secondbrain.debounceSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "Seconds to wait after last file change before processing"
+        },
+        "secondbrain.minMessages": {
+          "type": "number",
+          "default": 3,
+          "description": "Minimum number of messages required to create a note"
+        },
+        "secondbrain.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable automatic conversation saving"
+        },
+        "secondbrain.summaryModel": {
+          "type": "string",
+          "default": "gemini-2.5-flash-lite",
+          "description": "Gemini model to use for summarization"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "chokidar": "^3.6.0",
+    "p-queue": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

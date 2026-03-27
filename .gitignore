@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+
+# VS Code extension packaging
+*.vsix
+
+# Environment & secrets
+.env
+.env.*
+*.env
+
+# Claude Code files — NEVER commit
+.claude/
+CLAUDE.md
+
+# Docs subfolders (per project convention)
+docs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript incremental build
+*.tsbuildinfo
+
+# Runtime state
+.vsc-secondbrain/
