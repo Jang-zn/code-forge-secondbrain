@@ -10,7 +10,7 @@ export class Config {
   }
 
   get targetFolder(): string {
-    return this.cfg.get<string>('targetFolder') ?? '5.Box/claude-conversations';
+    return this.cfg.get<string>('targetFolder') ?? 'claude-conversations';
   }
 
   get debounceSeconds(): number {

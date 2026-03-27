@@ -47,7 +47,7 @@
         },
         "secondbrain.targetFolder": {
           "type": "string",
-          "default": "5.Box/claude-conversations",
+          "default": "claude-conversations",
           "description": "Folder inside vault to save conversation notes"
         },
         "secondbrain.debounceSeconds": {
