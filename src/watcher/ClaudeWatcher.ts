@@ -34,7 +34,10 @@ export class ClaudeWatcher implements vscode.Disposable {
     const watchPath = path.join(os.homedir(), '.claude', 'projects');
     if (!fs.existsSync(watchPath)) return;
 
-    this.watcher = chokidar.watch(path.join(watchPath, '**', '*.jsonl'), {
+    // chokidar glob requires forward slashes even on Windows
+    const globPattern = watchPath.replace(/\\/g, '/') + '/**/*.jsonl';
+
+    this.watcher = chokidar.watch(globPattern, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
       persistent: true,
@@ -163,19 +166,17 @@ export class ClaudeWatcher implements vscode.Disposable {
 }
 
 function resolveProjectName(session: { projectPath: string }): string {
-  // Try workspace folder first
   const wsFolder = vscode.workspace.workspaceFolders?.[0];
   if (wsFolder) {
     const wsPath = wsFolder.uri.fsPath;
-    // If session cwd matches workspace, use workspace name
-    if (session.projectPath.startsWith(wsPath)) {
+    // Case-insensitive comparison for Windows (C:\Users vs c:\users)
+    const normalize = (p: string) => path.normalize(p).toLowerCase();
+    if (normalize(session.projectPath).startsWith(normalize(wsPath))) {
       return wsFolder.name;
     }
   }
 
-  // Fall back to basename of session projectPath
-  const { basename } = require('path');
-  return basename(session.projectPath) || 'unknown-project';
+  return path.basename(session.projectPath) || 'unknown-project';
 }
 
 function findJsonlFiles(dir: string): string[] {
