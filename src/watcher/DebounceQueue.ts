@@ -29,6 +29,15 @@ export class DebounceQueue {
     this.timers.set(key, timer);
   }
 
+  /** Cancel the debounce timer for a key (does not run the job) */
+  flush(key: string): void {
+    const existing = this.timers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      this.timers.delete(key);
+    }
+  }
+
   async drain(): Promise<void> {
     // Flush all pending timers immediately
     for (const [key, timer] of this.timers) {

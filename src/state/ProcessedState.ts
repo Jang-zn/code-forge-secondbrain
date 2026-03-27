@@ -4,7 +4,8 @@ import * as os from 'os';
 
 interface StateEntry {
   mtime: number;
-  noteFile: string;
+  processedMessageCount: number;
+  noteFiles: string[];
   processedAt: string;
 }
 
@@ -46,17 +47,24 @@ export class ProcessedState {
     return mtime > entry.mtime;
   }
 
-  markProcessed(filePath: string, mtime: number, noteFile: string): void {
+  /** Returns number of messages already processed for this session (0 if new) */
+  getProcessedMessageCount(filePath: string): number {
+    return this.data.entries[filePath]?.processedMessageCount ?? 0;
+  }
+
+  /** Returns note file paths created during previous processing */
+  getPreviousNoteFiles(filePath: string): string[] {
+    return this.data.entries[filePath]?.noteFiles ?? [];
+  }
+
+  markProcessed(filePath: string, mtime: number, messageCount: number, noteFiles: string[]): void {
     this.data.entries[filePath] = {
       mtime,
-      noteFile,
+      processedMessageCount: messageCount,
+      noteFiles,
       processedAt: new Date().toISOString(),
     };
     this.save();
-  }
-
-  getLastNoteFile(filePath: string): string | undefined {
-    return this.data.entries[filePath]?.noteFile;
   }
 
   clearAll(): void {

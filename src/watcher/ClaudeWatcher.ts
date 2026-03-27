@@ -43,8 +43,23 @@ export class ClaudeWatcher implements vscode.Disposable {
       persistent: true,
     });
 
-    this.watcher.on('add', (filePath) => this.onFileChange(filePath));
+    this.watcher.on('add', (filePath) => this.onFileAdd(filePath));
     this.watcher.on('change', (filePath) => this.onFileChange(filePath));
+  }
+
+  private onFileAdd(newFilePath: string): void {
+    if (!this.config.enabled) return;
+
+    // New file = previous session ended — immediately process sibling files
+    const projectDir = path.dirname(newFilePath);
+    const siblings = findJsonlFiles(projectDir).filter(f => f !== newFilePath);
+    for (const sibling of siblings) {
+      this.debounceQueue.flush(sibling);
+      this.processFile(sibling).catch(() => {});
+    }
+
+    // Register new file with normal debounce
+    this.onFileChange(newFilePath);
   }
 
   private onFileChange(filePath: string): void {
@@ -76,8 +91,12 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Guard: minimum messages
-      if (session.messages.length < this.config.minMessages) {
+      // Only process messages that haven't been processed yet
+      const alreadyProcessed = this.state.getProcessedMessageCount(filePath);
+      const newMessages = session.messages.slice(alreadyProcessed);
+
+      // Guard: minimum new messages
+      if (newMessages.length < this.config.minMessages) {
         this.statusBar.setIdle();
         return;
       }
@@ -92,9 +111,14 @@ export class ClaudeWatcher implements vscode.Disposable {
         return;
       }
 
-      // Summarize (returns array of topic summaries)
+      // Load previous notes as context (strip Full Conversation section)
+      const previousNoteFiles = this.state.getPreviousNoteFiles(filePath);
+      const previousContext = loadPreviousContext(previousNoteFiles);
+
+      // Summarize only new messages, with previous context
+      const sessionWithNewMessages = { ...session, messages: newMessages };
       const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
-      const summaries = await summarizer.summarize(session);
+      const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
       // Match vault links and write one note per topic
       await this.vaultIndex.refresh(this.config.vaultPath);
@@ -108,7 +132,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           vaultPath: this.config.vaultPath,
           targetFolder: this.config.targetFolder,
           projectName,
-          session,
+          session: sessionWithNewMessages,
           summary,
           matchedLinks,
           existingNotePath: undefined,
@@ -116,13 +140,12 @@ export class ClaudeWatcher implements vscode.Disposable {
         notePaths.push(notePath);
       }
 
-      // Mark as processed
-      this.state.markProcessed(filePath, stat.mtimeMs, notePaths[0] ?? '');
+      // Mark as processed with total message count and note file paths
+      this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
 
       const firstTitle = summaries[0]?.title ?? 'Claude 대화';
       this.statusBar.setSuccess(firstTitle);
 
-      // Show notification with "Open Note" button
       const label = summaries.length > 1
         ? `${summaries.length}개 주제로 저장됨`
         : `"${firstTitle}" saved to Obsidian`;
@@ -141,21 +164,28 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
   }
 
-  async processAll(): Promise<void> {
+  /** Process only the most recently modified JSONL file (current session) */
+  async processCurrent(): Promise<void> {
     const watchPath = path.join(os.homedir(), '.claude', 'projects');
     if (!fs.existsSync(watchPath)) return;
 
     const files = findJsonlFiles(watchPath);
-    vscode.window.showInformationMessage(
-      `SecondBrain: Processing ${files.length} conversation files…`
-    );
-
-    for (const file of files) {
-      // Override shouldProcess check for processAll
-      const stat = fs.statSync(file);
-      this.state['data'] && delete (this.state as any)['data']['entries'][file];
-      await this.processFile(file);
+    if (files.length === 0) {
+      vscode.window.showWarningMessage('SecondBrain: No conversation files found.');
+      return;
     }
+
+    // Find most recently modified file
+    const latest = files.reduce((a, b) => {
+      return fs.statSync(a).mtimeMs > fs.statSync(b).mtimeMs ? a : b;
+    });
+
+    // Bypass mtime check so manual trigger always works
+    const stat = fs.statSync(latest);
+    const entry = (this.state as any).data?.entries?.[latest];
+    if (entry) entry.mtime = 0;
+
+    await this.processFile(latest);
   }
 
   dispose(): void {
@@ -168,7 +198,6 @@ function resolveProjectName(session: { projectPath: string }): string {
   const wsFolder = vscode.workspace.workspaceFolders?.[0];
   if (wsFolder) {
     const wsPath = wsFolder.uri.fsPath;
-    // Case-insensitive comparison for Windows (C:\Users vs c:\users)
     const normalize = (p: string) => path.normalize(p).toLowerCase();
     if (normalize(session.projectPath).startsWith(normalize(wsPath))) {
       return wsFolder.name;
@@ -176,6 +205,21 @@ function resolveProjectName(session: { projectPath: string }): string {
   }
 
   return path.basename(session.projectPath) || 'unknown-project';
+}
+
+function loadPreviousContext(noteFiles: string[]): string | undefined {
+  const parts: string[] = [];
+  for (const filePath of noteFiles) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      // Strip ## Full Conversation section and everything after it
+      const stripped = content.replace(/^## Full Conversation[\s\S]*/m, '').trim();
+      if (stripped) parts.push(stripped);
+    } catch {
+      // File may have been deleted — skip
+    }
+  }
+  return parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
 }
 
 function findJsonlFiles(dir: string): string[] {

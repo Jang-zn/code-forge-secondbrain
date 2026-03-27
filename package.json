@@ -25,8 +25,8 @@
         "title": "SecondBrain: Set Vault Path"
       },
       {
-        "command": "secondbrain.processAll",
-        "title": "SecondBrain: Process All Existing Conversations"
+        "command": "secondbrain.processCurrent",
+        "title": "SecondBrain: Process Current Session"
       },
       {
         "command": "secondbrain.enable",

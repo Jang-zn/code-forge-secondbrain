@@ -19,7 +19,7 @@ export class GeminiSummarizer {
     this.model = model;
   }
 
-  async summarize(session: ParsedSession): Promise<SummaryResult[]> {
+  async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
     const conversationText = session.messages
       .map(m => `${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
       .join('\n\n');
@@ -29,8 +29,16 @@ export class GeminiSummarizer {
 프로젝트: ${session.projectPath}
 Git 브랜치: ${session.gitBranch ?? 'unknown'}
 사용한 도구: ${session.toolUses.join(', ') || '없음'}
+${previousContext ? `
+========================================
+[맥락 참고용 — 문서화 대상 아님]
+이전에 처리된 대화 요약입니다. 흐름 파악에만 사용하고, 이 내용을 새 노트로 만들지 마세요.
 
-대화 내용:
+${previousContext}
+========================================
+` : ''}
+[문서화 대상 — 아래 내용만 노트로 만드세요]
+새로운 대화 내용:
 ${conversationText}
 
 다음 JSON 스키마로 응답하세요 (다른 텍스트 없이 JSON만):
@@ -38,11 +46,11 @@ ${conversationText}
   "topics": [
     {
       "title": "대화의 핵심 주제를 나타내는 짧고 명확한 제목 (한국어 또는 영어, 50자 이내)",
-      "summary": "이 주제에서 무엇을 했는지 10-15문장으로 요약(한글로 적어주세요)",
-      "keyTopics": ["주요 기술/개념 목록 (최대 8개, 중복 없이 적어주세요, 한글로 적어주세요)"],
-      "decisions": ["이 주제에서 내린 결정 사항들 (한글로 적어주세요)"],
-      "codeChanges": ["수정/생성된 파일 및 변경 내용 (한글로 적어주세요)"],
-      "tags": ["분류 태그 (기술명, 작업 유형 등, 최대 5개, 중복 없이 적어주세요, 한글로 적어주세요)"]
+      "summary": "이 주제에서 무엇을 했는지 5-10문장으로 요약 (한글로)",
+      "keyTopics": ["vault 노트 링크용 구체적 기술/개념명, 최대 8개 (영문 기술명 그대로 사용)"],
+      "decisions": ["이 주제에서 내린 결정 사항들을 상세하게 (한글로)"],
+      "codeChanges": ["수정/생성된 파일 및 변경 내용 요약 (한글로)"],
+      "tags": ["작업 유형 분류 태그, 최대 5개 (예: 버그수정, 리팩토링, 설정, 기능추가, 학습자료)"]
     }
   ]
 }

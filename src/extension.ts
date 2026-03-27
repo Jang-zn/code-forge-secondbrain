@@ -77,14 +77,14 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
 
-    vscode.commands.registerCommand('secondbrain.processAll', async () => {
+    vscode.commands.registerCommand('secondbrain.processCurrent', async () => {
       if (!config.isValid()) {
         vscode.window.showWarningMessage(
           'SecondBrain: Set secondbrain.vaultPath first.'
         );
         return;
       }
-      await watcher?.processAll();
+      await watcher?.processCurrent();
     }),
 
     vscode.commands.registerCommand('secondbrain.enable', async () => {
