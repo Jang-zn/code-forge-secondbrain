@@ -12,12 +12,11 @@ import { NoteWriter } from '../vault/NoteWriter';
 import { FileLock } from '../state/FileLock';
 import type { Config, ApiKeyManager } from '../config';
 import type { StatusBar } from '../ui/StatusBar';
+import type { Logger } from '../ui/Logger';
 
 const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
-const SUBAGENTS_PATH_SEGMENT = '/subagents/';
-
 function isSubagentFile(filePath: string): boolean {
-  return filePath.includes(SUBAGENTS_PATH_SEGMENT);
+  return filePath.includes('/subagents/') || filePath.includes('\\subagents\\');
 }
 
 export class ClaudeWatcher implements vscode.Disposable {
@@ -34,7 +33,8 @@ export class ClaudeWatcher implements vscode.Disposable {
   constructor(
     private config: Config,
     private apiKeyManager: ApiKeyManager,
-    private statusBar: StatusBar
+    private statusBar: StatusBar,
+    private logger?: Logger
   ) {
     this.state = new ProcessedState();
   }
@@ -42,6 +42,8 @@ export class ClaudeWatcher implements vscode.Disposable {
   start(): void {
     const watchPath = CLAUDE_PROJECTS_PATH;
     if (!fs.existsSync(watchPath)) return;
+
+    this.logger?.info(`Watcher started — watching ${watchPath}`);
 
     // Pre-seed state with all existing files so fresh installs don't bulk-process history
     this.initializeExistingFiles(watchPath).catch(() => {});
@@ -198,6 +200,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       }
 
       this.statusBar.setProcessing();
+      this.logger?.info(`Processing: ${filePath}`);
 
       try {
         const session = this.parser.parse(filePath);
@@ -248,7 +251,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           messages: newMessages,
           firstTimestamp: newMessages[0]?.timestamp ?? session.firstTimestamp,
         };
-        const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel);
+        const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel, this.logger);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
         if (summaries.length === 0) {
@@ -291,6 +294,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         }
 
         await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
+        this.logger?.info(`Completed: ${notePaths.length} note(s) created`);
 
         const firstTitle = summaries.find(s => !s.incomplete)?.title ?? 'Claude 대화';
         this.statusBar.setSuccess(firstTitle);
@@ -308,6 +312,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        this.logger?.error(msg);
         this.statusBar.setError(msg);
         vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
       }
@@ -326,7 +331,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
     let searchDir = CLAUDE_PROJECTS_PATH;
     if (wsFolder) {
-      const encoded = wsFolder.uri.fsPath.replace(/\//g, '-');
+      const encoded = wsFolder.uri.fsPath.replace(/[\\/]/g, '-').replace(/:/g, '');
       searchDir = path.join(CLAUDE_PROJECTS_PATH, encoded);
     }
 

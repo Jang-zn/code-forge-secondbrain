@@ -2,16 +2,19 @@ import * as vscode from 'vscode';
 import { Config, ApiKeyManager } from './config';
 import { ClaudeWatcher } from './watcher/ClaudeWatcher';
 import { StatusBar } from './ui/StatusBar';
+import { Logger } from './ui/Logger';
 
 let watcher: ClaudeWatcher | undefined;
 let statusBar: StatusBar | undefined;
+let logger: Logger | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = new Config();
   const apiKeyManager = new ApiKeyManager(context.secrets);
   statusBar = new StatusBar();
+  logger = new Logger();
 
-  watcher = new ClaudeWatcher(config, apiKeyManager, statusBar);
+  watcher = new ClaudeWatcher(config, apiKeyManager, statusBar, logger);
 
   if (config.enabled) {
     watcher.start();
@@ -101,12 +104,16 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage('SecondBrain: Disabled.');
     }),
 
+    vscode.commands.registerCommand('secondbrain.showLogs', () => {
+      logger?.show();
+    }),
+
     // Re-create watcher when config changes
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('secondbrain')) return;
       if (config.enabled) {
         watcher?.dispose();
-        watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!);
+        watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!, logger);
         watcher.start();
         statusBar?.setIdle();
       }
@@ -114,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     watcher,
     statusBar,
+    logger,
   );
 }
 
@@ -121,4 +129,5 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   watcher?.dispose();
   statusBar?.dispose();
+  logger?.dispose();
 }

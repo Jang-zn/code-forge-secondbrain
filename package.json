@@ -35,6 +35,10 @@
       {
         "command": "secondbrain.disable",
         "title": "SecondBrain: Disable"
+      },
+      {
+        "command": "secondbrain.showLogs",
+        "title": "SecondBrain: Show Logs"
       }
     ],
     "configuration": {
@@ -75,8 +79,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
-    "chokidar": "^3.6.0",
-    "p-queue": "^8.0.1"
+    "chokidar": "^3.6.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

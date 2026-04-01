@@ -6,7 +6,7 @@ export class JsonlParser {
   parse(filePath: string): ParsedSession | null {
     const stat = fs.statSync(filePath);
     const raw = fs.readFileSync(filePath, 'utf-8');
-    const lines = raw.split('\n').filter(l => l.trim());
+    const lines = raw.split(/\r?\n/).filter(l => l.trim());
 
     const records: RawRecord[] = [];
     for (const line of lines) {

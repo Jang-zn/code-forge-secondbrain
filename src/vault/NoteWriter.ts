@@ -24,7 +24,8 @@ export class NoteWriter {
     const dir = path.join(vaultPath, targetFolder, projectName, dateStr);
     fs.mkdirSync(dir, { recursive: true });
 
-    const baseName = `${timeStr}-${safeTitle}`;
+    const typeTag = (summary.tags[0] ?? 'log').toLowerCase();
+    const baseName = `${timeStr}-[${typeTag}]-${safeTitle}`;
     const content = this.renderNote(opts, `${dateStr} ${timeStr}`);
 
     if (opts.existingNotePath) {
@@ -63,6 +64,21 @@ export class NoteWriter {
       .filter(Boolean)
       .join('\n');
 
+    // Investigation section
+    const investigationSection = summary.investigation
+      ? formatNarrative(summary.investigation)
+      : '_없음_';
+
+    // Decision rationale section
+    const decisionRationaleSection = summary.decisionRationale
+      ? formatNarrative(summary.decisionRationale)
+      : '_없음_';
+
+    // Insights section
+    const insightsSection = summary.insights.length > 0
+      ? summary.insights.map(i => `- ${i}`).join('\n')
+      : '_없음_';
+
     // Key Topics section with wikilinks
     const keyTopicsSection = summary.keyTopics.length > 0
       ? summary.keyTopics.map(topic => {
@@ -96,7 +112,7 @@ export class NoteWriter {
       : session.messages;
     const conversationLines = filteredMessages.map(m => {
       const role = m.role === 'user' ? '**User**' : '**Claude**';
-      return `> ${role}: ${m.content.replace(/\n/g, '\n> ')}`;
+      return `> ${role}: ${m.content.replace(/\r?\n/g, '\n> ')}`;
     });
 
     return [
@@ -105,7 +121,10 @@ export class NoteWriter {
       `# ${summary.title}`,
       '',
       '## Summary',
-      formatSummary(summary.summary),
+      formatNarrative(summary.summary),
+      '',
+      '## Investigation',
+      investigationSection,
       '',
       '## Key Topics',
       keyTopicsSection,
@@ -113,8 +132,14 @@ export class NoteWriter {
       '## Decisions',
       decisionsSection,
       '',
+      '## Decision Rationale',
+      decisionRationaleSection,
+      '',
       '## Code Changes',
       codeChangesSection,
+      '',
+      '## Insights',
+      insightsSection,
       '',
       '## Related Notes',
       relatedSection,
@@ -154,8 +179,8 @@ function escapeYaml(str: string): string {
   return str.replace(/"/g, '\\"');
 }
 
-// 이미 단락 구분이 있으면 그대로, 없으면 문장 3개마다 빈 줄 삽입
-function formatSummary(text: string): string {
+// 이미 줄바꿈이 있으면 그대로, 없으면 문장 단위로 줄바꿈 삽입
+function formatNarrative(text: string): string {
   if (!text) return text;
   if (text.includes('\n\n')) return text;
 
