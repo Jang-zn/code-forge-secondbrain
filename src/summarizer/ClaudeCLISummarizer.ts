@@ -62,7 +62,10 @@ export class ClaudeCLISummarizer implements Summarizer {
         '--bare',
       ];
 
-      const child = spawn(this.binary, args, { env: process.env });
+      // nvm 환경에서 VS Code는 쉘 PATH를 상속 안 함 — 바이너리 디렉토리를 PATH에 추가
+      const nodeBinDir = path.dirname(this.binary);
+      const env = { ...process.env, PATH: [nodeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter) };
+      const child = spawn(this.binary, args, { env });
 
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
