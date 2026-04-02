@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { ParsedSession } from '../parser/types';
 import type { Logger } from '../ui/Logger';
 
@@ -92,12 +93,12 @@ messageIndices는 이 주제에 해당하는 메시지의 인덱스 번호 배�
     const genAI = new GoogleGenerativeAI(this.apiKey);
     const geminiModel = genAI.getGenerativeModel({ model: this.model });
 
-    const tracker = this.logger?.apiStart(this.model, prompt);
+    const projectName = path.basename(session.projectPath) || 'unknown';
+    const tracker = this.logger?.apiStart(this.model, `${projectName} ${session.messages.length}개 메시지 요약`);
     let text: string;
     try {
       const result = await geminiModel.generateContent(prompt);
       text = result.response.text().trim();
-      tracker?.end(text);
     } catch (err) {
       tracker?.fail(err);
       throw err;
@@ -106,29 +107,38 @@ messageIndices는 이 주제에 해당하는 메시지의 인덱스 번호 배�
     // Strip markdown code fences if present
     const jsonText = text.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
 
+    let topics: SummaryResult[];
     try {
       const parsed = JSON.parse(jsonText) as { topics: SummaryResult[] };
-      const topics = Array.isArray(parsed.topics) ? parsed.topics : [];
-      const allIndices = session.messages.map((_, i) => i);
-      return topics.map(t => ({
-        title: t.title ?? 'Claude 대화',
-        summary: t.summary ?? '',
-        keyTopics: Array.isArray(t.keyTopics) ? t.keyTopics : [],
-        decisions: Array.isArray(t.decisions) ? t.decisions : [],
-        codeChanges: Array.isArray(t.codeChanges)
-          ? t.codeChanges.map((c: unknown) => typeof c === 'string' ? c : JSON.stringify(c))
-          : [],
-        tags: Array.isArray(t.tags) ? t.tags : [],
-        messageIndices: Array.isArray(t.messageIndices) && t.messageIndices.length > 0
-          ? t.messageIndices
-          : allIndices,
-        incomplete: t.incomplete === true,
-        investigation: typeof t.investigation === 'string' ? t.investigation : '',
-        decisionRationale: typeof t.decisionRationale === 'string' ? t.decisionRationale : '',
-        insights: Array.isArray(t.insights) ? t.insights : [],
-      }));
+      topics = Array.isArray(parsed.topics) ? parsed.topics : [];
     } catch (e) {
+      if (this.logger) {
+        this.logger.stats.apiInvalidated++;
+      }
+      tracker?.fail(new Error(`JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`));
       throw new Error(`요약 JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    const incompleteCount = topics.filter(t => t.incomplete === true).length;
+    tracker?.end(`${topics.length}개 토픽 (미완료 ${incompleteCount})`);
+
+    const allIndices = session.messages.map((_, i) => i);
+    return topics.map(t => ({
+      title: t.title ?? 'Claude 대화',
+      summary: t.summary ?? '',
+      keyTopics: Array.isArray(t.keyTopics) ? t.keyTopics : [],
+      decisions: Array.isArray(t.decisions) ? t.decisions : [],
+      codeChanges: Array.isArray(t.codeChanges)
+        ? t.codeChanges.map((c: unknown) => typeof c === 'string' ? c : JSON.stringify(c))
+        : [],
+      tags: Array.isArray(t.tags) ? t.tags : [],
+      messageIndices: Array.isArray(t.messageIndices) && t.messageIndices.length > 0
+        ? t.messageIndices
+        : allIndices,
+      incomplete: t.incomplete === true,
+      investigation: typeof t.investigation === 'string' ? t.investigation : '',
+      decisionRationale: typeof t.decisionRationale === 'string' ? t.decisionRationale : '',
+      insights: Array.isArray(t.insights) ? t.insights : [],
+    }));
   }
 }

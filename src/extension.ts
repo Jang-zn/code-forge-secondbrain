@@ -1,8 +1,13 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
 import { Config, ApiKeyManager } from './config';
 import { ClaudeWatcher } from './watcher/ClaudeWatcher';
 import { StatusBar } from './ui/StatusBar';
 import { Logger } from './ui/Logger';
+
+const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
 
 let watcher: ClaudeWatcher | undefined;
 let statusBar: StatusBar | undefined;
@@ -14,11 +19,24 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBar();
   logger = new Logger();
 
+  // 시작 진단
+  logger.info('SecondBrain 시작');
+  logger.diagnostic('Vault 경로', config.vaultPath ? 'OK' : 'MISSING', config.vaultPath || '미설정 — Setup 명령 실행 필요');
+  logger.diagnostic('활성화', config.enabled ? 'OK' : 'MISSING', config.enabled ? '사용 중' : '비활성화됨');
+  logger.diagnostic('Claude 프로젝트 폴더', fs.existsSync(CLAUDE_PROJECTS_PATH) ? 'OK' : 'MISSING', CLAUDE_PROJECTS_PATH);
+  logger.diagnostic('요약 모델', 'OK', config.summaryModel);
+
+  // API 키는 비동기
+  apiKeyManager.get().then(key => {
+    logger?.diagnostic('Gemini API 키', key ? 'OK' : 'MISSING', key ? '설정됨' : '미설정 — Setup 명령 실행 필요');
+  });
+
   watcher = new ClaudeWatcher(config, apiKeyManager, statusBar, logger);
 
   if (config.enabled) {
     watcher.start();
   } else {
+    logger.info('감시 미시작: 확장이 비활성화 상태');
     statusBar.setDisabled();
   }
 
