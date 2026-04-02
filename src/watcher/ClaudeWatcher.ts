@@ -42,7 +42,8 @@ export class ClaudeWatcher implements vscode.Disposable {
     private config: Config,
     private apiKeyManager: ApiKeyManager,
     private statusBar: StatusBar,
-    private logger?: Logger
+    private logger?: Logger,
+    private resolvedBinary?: string
   ) {
     this.state = new ProcessedState();
   }
@@ -300,8 +301,9 @@ export class ClaudeWatcher implements vscode.Disposable {
           messages: newMessages,
           firstTimestamp: newMessages[0]?.timestamp ?? session.firstTimestamp,
         };
+        const claudeBinary = this.resolvedBinary ?? this.config.claudeCliBinary;
         const summarizer = provider === 'claude-cli'
-          ? new ClaudeCLISummarizer(this.config.claudeCliBinary, this.config.claudeCliModel, this.logger)
+          ? new ClaudeCLISummarizer(claudeBinary, this.config.claudeCliModel, this.logger)
           : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 

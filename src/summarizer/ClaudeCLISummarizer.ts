@@ -63,8 +63,8 @@ export class ClaudeCLISummarizer implements Summarizer {
         '--no-session-persistence',
       ];
 
-      const [executor, prefixArgs] = resolveExecutor(this.binary);
-      const child = spawn(executor, [...prefixArgs, ...args], { env: process.env });
+      const { cmd, args: prefixArgs, spawnOpts } = resolveExecutor(this.binary);
+      const child = spawn(cmd, [...prefixArgs, ...args], { env: process.env, ...spawnOpts });
 
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];

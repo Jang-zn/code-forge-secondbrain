@@ -97,7 +97,7 @@
         "secondbrain.claudeCliBinary": {
           "type": "string",
           "default": "claude",
-          "description": "Claude CLI 바이너리 경로 (기본값: 'claude'. nvm 등으로 경로가 다를 경우 절대 경로 입력)"
+          "description": "Claude CLI 바이너리 경로 (기본: 자동 감지. nvm/Windows 환경에서도 자동으로 찾습니다. 감지 실패 시 절대 경로 직접 입력)"
         }
       }
     }

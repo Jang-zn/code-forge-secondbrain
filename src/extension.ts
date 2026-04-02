@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { Config, ApiKeyManager } from './config';
-import { resolveExecutor } from './spawnHelper';
+import { resolveExecutor, findClaudeBinary } from './spawnHelper';
 import { ClaudeWatcher } from './watcher/ClaudeWatcher';
 import { StatusBar } from './ui/StatusBar';
 import { Logger } from './ui/Logger';
@@ -26,27 +26,44 @@ export function activate(context: vscode.ExtensionContext): void {
   logger.diagnostic('Vault 경로', config.vaultPath ? 'OK' : 'MISSING', config.vaultPath || '미설정 — Setup 명령 실행 필요');
   logger.diagnostic('활성화', config.enabled ? 'OK' : 'MISSING', config.enabled ? '사용 중' : '비활성화됨');
   logger.diagnostic('Claude 프로젝트 폴더', fs.existsSync(CLAUDE_PROJECTS_PATH) ? 'OK' : 'MISSING', CLAUDE_PROJECTS_PATH);
-  logger.diagnostic('요약 모델', 'OK', config.summaryModel);
 
-  logger.diagnostic('요약 엔진', 'OK', config.summaryProvider === 'claude-cli'
+  const provider = config.summaryProvider;
+  logger.diagnostic('요약 엔진', 'OK', provider === 'claude-cli'
     ? `claude-cli (${config.claudeCliModel})`
     : `gemini (${config.summaryModel})`);
 
   // Gemini 사용 시에만 API 키 확인
-  if (config.summaryProvider === 'gemini') {
+  if (provider === 'gemini') {
     apiKeyManager.get().then(key => {
       logger?.diagnostic('Gemini API 키', key ? 'OK' : 'MISSING', key ? '설정됨' : '미설정 — Setup 명령 실행 필요');
     });
   }
 
-  watcher = new ClaudeWatcher(config, apiKeyManager, statusBar, logger);
+  // Claude CLI 바이너리 감지 (비동기) 후 watcher 시작
+  const userBinary = config.claudeCliBinary;
+  const binaryPromise: Promise<string> = (userBinary && userBinary !== 'claude')
+    ? Promise.resolve(userBinary).then(b => {
+        logger?.diagnostic('Claude CLI 경로', 'OK', `${b} [수동 설정]`);
+        return b;
+      })
+    : findClaudeBinary(logger).then(b => {
+        if (b === 'claude') {
+          logger?.diagnostic('Claude CLI 경로', 'MISSING', `claude [자동 감지 실패 — 기본값 사용]`);
+        } else {
+          logger?.diagnostic('Claude CLI 경로', 'OK', `${b} [자동 감지]`);
+        }
+        return b;
+      });
 
-  if (config.enabled) {
-    watcher.start();
-  } else {
-    logger.info('감시 미시작: 확장이 비활성화 상태');
-    statusBar.setDisabled();
-  }
+  binaryPromise.then(resolvedBinary => {
+    watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!, logger, resolvedBinary);
+    if (config.enabled) {
+      watcher.start();
+    } else {
+      logger?.info('감시 미시작: 확장이 비활성화 상태');
+      statusBar?.setDisabled();
+    }
+  });
 
   // Commands
   context.subscriptions.push(
@@ -140,13 +157,13 @@ export function activate(context: vscode.ExtensionContext): void {
       const provider = config.summaryProvider;
 
       if (provider === 'claude-cli') {
-        const binary = config.claudeCliBinary;
+        const binary = await binaryPromise;
         const model = config.claudeCliModel;
         vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: 'SecondBrain: Claude CLI 연결 테스트 중...' },
           () => new Promise<void>((resolve, reject) => {
-            const [executor, prefixArgs] = resolveExecutor(binary);
-            execFile(executor, [...prefixArgs, '--version'], { env: process.env, timeout: 5000 }, (err, stdout) => {
+            const { cmd, args: prefixArgs, spawnOpts } = resolveExecutor(binary);
+            execFile(cmd, [...prefixArgs, '--version'], { env: process.env, timeout: 5000, ...spawnOpts }, (err, stdout) => {
               if (err) {
                 reject(err);
                 const code = (err as NodeJS.ErrnoException).code;
@@ -163,7 +180,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 resolve();
                 const version = stdout.trim();
                 vscode.window.showInformationMessage(
-                  `SecondBrain: Claude CLI 확인 완료 (${version}, 모델: ${model})`
+                  `SecondBrain: Claude CLI 확인 완료 (${version}, 모델: ${model}, 경로: ${binary})`
                 );
               }
             });
@@ -202,9 +219,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!e.affectsConfiguration('secondbrain')) return;
       if (config.enabled) {
         watcher?.dispose();
-        watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!, logger);
-        watcher.start();
-        statusBar?.setIdle();
+        binaryPromise.then(resolvedBinary => {
+          watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!, logger, resolvedBinary);
+          watcher.start();
+          statusBar?.setIdle();
+        });
       }
     }),
 
