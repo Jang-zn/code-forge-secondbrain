@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import { Config, ApiKeyManager } from './config';
 import { ClaudeWatcher } from './watcher/ClaudeWatcher';
 import { StatusBar } from './ui/StatusBar';
@@ -26,10 +27,16 @@ export function activate(context: vscode.ExtensionContext): void {
   logger.diagnostic('Claude 프로젝트 폴더', fs.existsSync(CLAUDE_PROJECTS_PATH) ? 'OK' : 'MISSING', CLAUDE_PROJECTS_PATH);
   logger.diagnostic('요약 모델', 'OK', config.summaryModel);
 
-  // API 키는 비동기
-  apiKeyManager.get().then(key => {
-    logger?.diagnostic('Gemini API 키', key ? 'OK' : 'MISSING', key ? '설정됨' : '미설정 — Setup 명령 실행 필요');
-  });
+  logger.diagnostic('요약 엔진', 'OK', config.summaryProvider === 'claude-cli'
+    ? `claude-cli (${config.claudeCliModel})`
+    : `gemini (${config.summaryModel})`);
+
+  // Gemini 사용 시에만 API 키 확인
+  if (config.summaryProvider === 'gemini') {
+    apiKeyManager.get().then(key => {
+      logger?.diagnostic('Gemini API 키', key ? 'OK' : 'MISSING', key ? '설정됨' : '미설정 — Setup 명령 실행 필요');
+    });
+  }
 
   watcher = new ClaudeWatcher(config, apiKeyManager, statusBar, logger);
 
@@ -54,15 +61,17 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!uris || uris.length === 0) return;
       await config.setVaultPath(uris[0].fsPath);
 
-      // Step 2: Gemini API key
-      const key = await vscode.window.showInputBox({
-        prompt: '[2/2] Gemini API 키를 입력하세요',
-        password: true,
-        placeHolder: 'AIza...',
-        ignoreFocusOut: true,
-      });
-      if (key) {
-        await apiKeyManager.set(key);
+      // Step 2: Gemini API key (claude-cli 모드에서는 스킵)
+      if (config.summaryProvider === 'gemini') {
+        const key = await vscode.window.showInputBox({
+          prompt: '[2/2] Gemini API 키를 입력하세요',
+          password: true,
+          placeHolder: 'AIza...',
+          ignoreFocusOut: true,
+        });
+        if (key) {
+          await apiKeyManager.set(key);
+        }
       }
 
       vscode.window.showInformationMessage(
@@ -124,6 +133,66 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand('secondbrain.showLogs', () => {
       logger?.show();
+    }),
+
+    vscode.commands.registerCommand('secondbrain.testConnection', async () => {
+      const provider = config.summaryProvider;
+
+      if (provider === 'claude-cli') {
+        const binary = config.claudeCliBinary;
+        const model = config.claudeCliModel;
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'SecondBrain: Claude CLI 연결 테스트 중...' },
+          () => new Promise<void>((resolve, reject) => {
+            execFile(binary, ['--version'], { env: process.env, timeout: 5000 }, (err, stdout) => {
+              if (err) {
+                reject(err);
+                const code = (err as NodeJS.ErrnoException).code;
+                if (code === 'ENOENT') {
+                  vscode.window.showErrorMessage(
+                    `SecondBrain: Claude CLI를 찾을 수 없습니다 (${binary}). 터미널에서 'npm i -g @anthropic-ai/claude-code'로 설치하세요.`
+                  );
+                } else {
+                  vscode.window.showErrorMessage(
+                    `SecondBrain: Claude CLI 실행 실패 — ${err.message}. 터미널에서 'claude'를 실행해 로그인 상태를 확인하세요.`
+                  );
+                }
+              } else {
+                resolve();
+                const version = stdout.trim();
+                vscode.window.showInformationMessage(
+                  `SecondBrain: Claude CLI 확인 완료 (${version}, 모델: ${model})`
+                );
+              }
+            });
+          })
+        );
+      } else {
+        // Gemini 연결 테스트
+        const key = await apiKeyManager.get();
+        if (!key) {
+          vscode.window.showErrorMessage('SecondBrain: Gemini API 키가 설정되지 않았습니다. "SecondBrain: Set Gemini API Key"를 실행하세요.');
+          return;
+        }
+        vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'SecondBrain: Gemini 연결 테스트 중...' },
+          async () => {
+            try {
+              const { GoogleGenerativeAI } = await import('@google/generative-ai');
+              const genAI = new GoogleGenerativeAI(key);
+              const model = genAI.getGenerativeModel({ model: config.summaryModel });
+              await model.generateContent('ping');
+              vscode.window.showInformationMessage(
+                `SecondBrain: Gemini 연결 성공 (모델: ${config.summaryModel})`
+              );
+            } catch (err) {
+              vscode.window.showErrorMessage(
+                `SecondBrain: Gemini 연결 실패 — ${err instanceof Error ? err.message : String(err)}`
+              );
+            }
+          }
+        );
+      }
     }),
 
     // Re-create watcher when config changes

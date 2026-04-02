@@ -22,7 +22,19 @@ export class Config {
   }
 
   get summaryModel(): string {
-    return this.cfg.get<string>('summaryModel') ?? 'gemini-1.5-flash';
+    return this.cfg.get<string>('summaryModel') ?? 'gemini-2.5-flash-lite';
+  }
+
+  get summaryProvider(): 'gemini' | 'claude-cli' {
+    return this.cfg.get<'gemini' | 'claude-cli'>('summaryProvider') ?? 'claude-cli';
+  }
+
+  get claudeCliModel(): string {
+    return this.cfg.get<string>('claudeCliModel') ?? 'sonnet';
+  }
+
+  get claudeCliBinary(): string {
+    return this.cfg.get<string>('claudeCliBinary') ?? 'claude';
   }
 
   async setEnabled(value: boolean): Promise<void> {

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { SummaryResult } from '../summarizer/GeminiSummarizer';
+import type { SummaryResult } from '../summarizer/types';
 import type { ParsedSession } from '../parser/types';
 
 export interface NoteWriteOptions {

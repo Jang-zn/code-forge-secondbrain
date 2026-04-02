@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { JsonlParser } from '../parser/JsonlParser';
 import { ProcessedState } from '../state/ProcessedState';
 import { GeminiSummarizer } from '../summarizer/GeminiSummarizer';
+import { ClaudeCLISummarizer } from '../summarizer/ClaudeCLISummarizer';
 import { VaultIndex } from '../vault/VaultIndex';
 import { LinkMatcher } from '../vault/LinkMatcher';
 import { NoteWriter } from '../vault/NoteWriter';
@@ -266,14 +267,18 @@ export class ClaudeWatcher implements vscode.Disposable {
           return;
         }
 
-        const apiKey = await this.apiKeyManager.get();
-        if (!apiKey) {
-          this.logger?.warn('API 키 미설정으로 처리 중단', { project });
-          vscode.window.showWarningMessage(
-            'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
-          );
-          this.statusBar.setIdle();
-          return;
+        const provider = this.config.summaryProvider;
+        let apiKey: string | undefined;
+        if (provider === 'gemini') {
+          apiKey = await this.apiKeyManager.get();
+          if (!apiKey) {
+            this.logger?.warn('API 키 미설정으로 처리 중단', { project });
+            vscode.window.showWarningMessage(
+              'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
+            );
+            this.statusBar.setIdle();
+            return;
+          }
         }
 
         this.logger?.info('처리 시작', { project, 파일: path.basename(filePath), 새메시지: newMessages.length });
@@ -295,7 +300,9 @@ export class ClaudeWatcher implements vscode.Disposable {
           messages: newMessages,
           firstTimestamp: newMessages[0]?.timestamp ?? session.firstTimestamp,
         };
-        const summarizer = new GeminiSummarizer(apiKey, this.config.summaryModel, this.logger);
+        const summarizer = provider === 'claude-cli'
+          ? new ClaudeCLISummarizer(this.config.claudeCliBinary, this.config.claudeCliModel, this.logger)
+          : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
         if (summaries.length === 0) {

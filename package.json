@@ -39,6 +39,10 @@
       {
         "command": "secondbrain.showLogs",
         "title": "SecondBrain: Show Logs"
+      },
+      {
+        "command": "secondbrain.testConnection",
+        "title": "SecondBrain: AI 연결 테스트"
       }
     ],
     "configuration": {
@@ -67,7 +71,33 @@
         "secondbrain.summaryModel": {
           "type": "string",
           "default": "gemini-2.5-flash-lite",
-          "description": "Gemini model to use for summarization"
+          "description": "Gemini 사용 시 모델 (summaryProvider가 gemini일 때만 적용)"
+        },
+        "secondbrain.summaryProvider": {
+          "type": "string",
+          "enum": ["claude-cli", "gemini"],
+          "enumDescriptions": [
+            "로컬에 설치된 Claude Code CLI 사용 (추가 비용 없음, 구독 필요)",
+            "Gemini API 사용 (API 키 및 과금 필요)"
+          ],
+          "default": "claude-cli",
+          "markdownDescription": "요약에 사용할 AI 엔진. [🔗 연결 테스트](command:secondbrain.testConnection)"
+        },
+        "secondbrain.claudeCliModel": {
+          "type": "string",
+          "enum": ["sonnet", "opus", "haiku"],
+          "enumDescriptions": [
+            "Claude Sonnet — 속도/품질 균형 (권장)",
+            "Claude Opus — 최고 품질, 느림 (Max 구독 필요)",
+            "Claude Haiku — 빠르고 저렴, 낮은 품질"
+          ],
+          "default": "sonnet",
+          "description": "Claude CLI 사용 시 모델 선택 (summaryProvider가 claude-cli일 때 적용)"
+        },
+        "secondbrain.claudeCliBinary": {
+          "type": "string",
+          "default": "claude",
+          "description": "Claude CLI 바이너리 경로 (기본값: 'claude'. nvm 등으로 경로가 다를 경우 절대 경로 입력)"
         }
       }
     }
