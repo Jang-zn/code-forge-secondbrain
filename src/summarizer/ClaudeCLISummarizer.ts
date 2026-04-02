@@ -4,6 +4,7 @@ import type { ParsedSession } from '../parser/types';
 import type { Logger } from '../ui/Logger';
 import type { SummaryResult, Summarizer } from './types';
 import { buildSummaryPrompt, parseSummaryTopics } from './summaryUtils';
+import { resolveExecutor } from '../spawnHelper';
 
 export class ClaudeCLISummarizer implements Summarizer {
   constructor(
@@ -56,16 +57,14 @@ export class ClaudeCLISummarizer implements Summarizer {
   private spawnClaude(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const args = [
+        '-p',
         '--output-format', 'json',
         '--model', this.model,
         '--no-session-persistence',
-        '--bare',
       ];
 
-      // nvm 환경에서 VS Code는 쉘 PATH를 상속 안 함 — 바이너리 디렉토리를 PATH에 추가
-      const nodeBinDir = path.dirname(this.binary);
-      const env = { ...process.env, PATH: [nodeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter) };
-      const child = spawn(this.binary, args, { env });
+      const [executor, prefixArgs] = resolveExecutor(this.binary);
+      const child = spawn(executor, [...prefixArgs, ...args], { env: process.env });
 
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];

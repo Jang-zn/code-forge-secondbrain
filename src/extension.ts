@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { Config, ApiKeyManager } from './config';
+import { resolveExecutor } from './spawnHelper';
 import { ClaudeWatcher } from './watcher/ClaudeWatcher';
 import { StatusBar } from './ui/StatusBar';
 import { Logger } from './ui/Logger';
@@ -144,10 +145,8 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: 'SecondBrain: Claude CLI 연결 테스트 중...' },
           () => new Promise<void>((resolve, reject) => {
-            // nvm 환경에서 VS Code는 쉘 PATH를 상속 안 함 — 바이너리 디렉토리를 PATH에 추가
-            const nodeBinDir = path.dirname(binary);
-            const env = { ...process.env, PATH: [nodeBinDir, process.env.PATH].filter(Boolean).join(path.delimiter) };
-            execFile(binary, ['--version'], { env, timeout: 5000 }, (err, stdout) => {
+            const [executor, prefixArgs] = resolveExecutor(binary);
+            execFile(executor, [...prefixArgs, '--version'], { env: process.env, timeout: 5000 }, (err, stdout) => {
               if (err) {
                 reject(err);
                 const code = (err as NodeJS.ErrnoException).code;
