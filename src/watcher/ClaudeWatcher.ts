@@ -353,7 +353,11 @@ export class ClaudeWatcher implements vscode.Disposable {
         if (this.logger) {
           this.logger.stats.filesProcessed++;
           this.logger.stats.notesCreated += notePaths.length;
-          this.logger.info('노트 생성 완료', { project, 개수: notePaths.length });
+          this.logger.info('노트 생성 완료', {
+            project,
+            개수: notePaths.length,
+            파일: notePaths.map(p => path.basename(p)),
+          });
         }
 
         const firstTitle = summaries.find(s => !s.incomplete)?.title ?? 'Claude 대화';
@@ -415,7 +419,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
     );
 
-    await this.processFile(latest, true, true);
+    await this.processFile(latest, true, false);
   }
 
   dispose(): void {
