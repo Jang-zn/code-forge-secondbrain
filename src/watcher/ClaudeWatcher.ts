@@ -391,7 +391,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
     let searchDir = CLAUDE_PROJECTS_PATH;
     if (wsFolder) {
-      const encoded = wsFolder.uri.fsPath.replace(/[\\/]/g, '-').replace(/:/g, '');
+      const encoded = wsFolder.uri.fsPath.replace(/:/g, '-').replace(/[\\/]/g, '-');
       searchDir = path.join(CLAUDE_PROJECTS_PATH, encoded);
     }
 
