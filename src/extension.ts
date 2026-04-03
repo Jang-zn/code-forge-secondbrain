@@ -21,7 +21,6 @@ export function activate(context: vscode.ExtensionContext): void {
   statusBar = new StatusBar();
   logger = new Logger();
 
-  // 시작 진단
   logger.info('SecondBrain 시작');
   logger.diagnostic('Vault 경로', config.vaultPath ? 'OK' : 'MISSING', config.vaultPath || '미설정 — Setup 명령 실행 필요');
   logger.diagnostic('활성화', config.enabled ? 'OK' : 'MISSING', config.enabled ? '사용 중' : '비활성화됨');
@@ -32,16 +31,14 @@ export function activate(context: vscode.ExtensionContext): void {
     ? `claude-cli (${config.claudeCliModel})`
     : `gemini (${config.summaryModel})`);
 
-  // Gemini 사용 시에만 API 키 확인
   if (provider === 'gemini') {
     apiKeyManager.get().then(key => {
       logger?.diagnostic('Gemini API 키', key ? 'OK' : 'MISSING', key ? '설정됨' : '미설정 — Setup 명령 실행 필요');
     });
   }
 
-  // Claude CLI 바이너리 감지 (비동기) 후 watcher 시작
   const userBinary = config.claudeCliBinary;
-  const binaryPromise: Promise<string> = (userBinary && userBinary !== 'claude')
+  let binaryPromise: Promise<string> = (userBinary !== 'claude')
     ? Promise.resolve(userBinary).then(b => {
         logger?.diagnostic('Claude CLI 경로', 'OK', `${b} [수동 설정]`);
         return b;
@@ -65,10 +62,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  // Commands
   context.subscriptions.push(
     vscode.commands.registerCommand('secondbrain.setup', async () => {
-      // Step 1: Vault path
       const uris = await vscode.window.showOpenDialog({
         canSelectFiles: false,
         canSelectFolders: true,
@@ -79,7 +74,6 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!uris || uris.length === 0) return;
       await config.setVaultPath(uris[0].fsPath);
 
-      // Step 2: Gemini API key (claude-cli 모드에서는 스킵)
       if (config.summaryProvider === 'gemini') {
         const key = await vscode.window.showInputBox({
           prompt: '[2/2] Gemini API 키를 입력하세요',
@@ -132,6 +126,7 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         return;
       }
+      await binaryPromise;
       await watcher?.processCurrent();
     }),
 
@@ -187,7 +182,6 @@ export function activate(context: vscode.ExtensionContext): void {
           })
         );
       } else {
-        // Gemini 연결 테스트
         const key = await apiKeyManager.get();
         if (!key) {
           vscode.window.showErrorMessage('SecondBrain: Gemini API 키가 설정되지 않았습니다. "SecondBrain: Set Gemini API Key"를 실행하세요.');
@@ -214,11 +208,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    // Re-create watcher when config changes
     vscode.workspace.onDidChangeConfiguration(e => {
       if (!e.affectsConfiguration('secondbrain')) return;
       if (config.enabled) {
         watcher?.dispose();
+        const newBinary = config.claudeCliBinary;
+        binaryPromise = newBinary !== 'claude'
+          ? Promise.resolve(newBinary)
+          : findClaudeBinary(logger);
         binaryPromise.then(resolvedBinary => {
           watcher = new ClaudeWatcher(config, apiKeyManager, statusBar!, logger, resolvedBinary);
           watcher.start();
