@@ -13,9 +13,18 @@ export class ClaudeCLISummarizer implements Summarizer {
     private logger?: Logger
   ) {}
 
+  private static readonly MAX_MSG_CHARS = 2000;
+  private static readonly TIMEOUT_MS = 5 * 60 * 1000; // 5분
+
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
     const conversationText = session.messages
-      .map((m, i) => `[${i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
+      .map((m, i) => {
+        const role = m.role === 'user' ? 'User' : 'Claude';
+        const content = m.content.length > ClaudeCLISummarizer.MAX_MSG_CHARS
+          ? m.content.slice(0, ClaudeCLISummarizer.MAX_MSG_CHARS) + ' [... truncated]'
+          : m.content;
+        return `[${i}] ${role}: ${content}`;
+      })
       .join('\n\n');
 
     const prompt = buildSummaryPrompt(session, conversationText, previousContext);
@@ -69,10 +78,16 @@ export class ClaudeCLISummarizer implements Summarizer {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
 
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`claude 프로세스 타임아웃 (${ClaudeCLISummarizer.TIMEOUT_MS / 1000}초 초과)`));
+      }, ClaudeCLISummarizer.TIMEOUT_MS);
+
       child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
       child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
 
       child.on('error', (err) => {
+        clearTimeout(timer);
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           reject(new Error(`Claude CLI를 찾을 수 없습니다 (${this.binary}). 'npm i -g @anthropic-ai/claude-code'로 설치하세요.`));
         } else {
@@ -81,6 +96,7 @@ export class ClaudeCLISummarizer implements Summarizer {
       });
 
       child.on('close', (code) => {
+        clearTimeout(timer);
         if (code !== 0) {
           const errMsg = Buffer.concat(stderr).toString().trim();
           reject(new Error(`claude 프로세스 종료 코드 ${code}: ${errMsg}`));
@@ -89,7 +105,6 @@ export class ClaudeCLISummarizer implements Summarizer {
         resolve(Buffer.concat(stdout).toString());
       });
 
-      // 프롬프트를 stdin으로 전달 (arg 길이 제한 우회)
       child.stdin.write(prompt);
       child.stdin.end();
     });
