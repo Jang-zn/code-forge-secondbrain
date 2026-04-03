@@ -4,6 +4,7 @@ import type { ParsedSession } from '../parser/types';
 import type { Logger } from '../ui/Logger';
 import type { SummaryResult, Summarizer } from './types';
 import { buildSummaryPrompt, parseSummaryTopics } from './summaryUtils';
+import { compressMessages } from './messageFilter';
 import { resolveExecutor } from '../spawnHelper';
 
 export class ClaudeCLISummarizer implements Summarizer {
@@ -17,20 +18,15 @@ export class ClaudeCLISummarizer implements Summarizer {
   private static readonly TIMEOUT_MS = 5 * 60 * 1000; // 5분
 
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
-    const conversationText = session.messages
-      .map((m, i) => {
-        const role = m.role === 'user' ? 'User' : 'Claude';
-        const content = m.content.length > ClaudeCLISummarizer.MAX_MSG_CHARS
-          ? m.content.slice(0, ClaudeCLISummarizer.MAX_MSG_CHARS) + ' [... truncated]'
-          : m.content;
-        return `[${i}] ${role}: ${content}`;
-      })
-      .join('\n\n');
+    const { text: conversationText, originalCount, keptCount } = compressMessages(
+      session.messages,
+      ClaudeCLISummarizer.MAX_MSG_CHARS,
+    );
 
     const prompt = buildSummaryPrompt(session, conversationText, previousContext);
 
     const projectName = path.basename(session.projectPath) || 'unknown';
-    const tracker = this.logger?.apiStart(this.model, `${projectName} ${session.messages.length}개 메시지 요약`);
+    const tracker = this.logger?.apiStart(this.model, `${projectName} ${keptCount}/${originalCount}개 메시지 요약`);
 
     let rawText: string;
     try {

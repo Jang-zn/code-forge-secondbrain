@@ -3,6 +3,7 @@ import type { ParsedSession } from '../parser/types';
 import type { Logger } from '../ui/Logger';
 import type { SummaryResult, Summarizer } from './types';
 import { buildSummaryPrompt, parseSummaryTopics } from './summaryUtils';
+import { compressMessages } from './messageFilter';
 
 export type { SummaryResult };
 
@@ -18,9 +19,7 @@ export class GeminiSummarizer implements Summarizer {
   }
 
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
-    const conversationText = session.messages
-      .map((m, i) => `[${i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
-      .join('\n\n');
+    const { text: conversationText, originalCount, keptCount } = compressMessages(session.messages);
 
     const prompt = buildSummaryPrompt(session, conversationText, previousContext);
 
@@ -29,7 +28,7 @@ export class GeminiSummarizer implements Summarizer {
     const geminiModel = genAI.getGenerativeModel({ model: this.model });
 
     const projectName = path.basename(session.projectPath) || 'unknown';
-    const tracker = this.logger?.apiStart(this.model, `${projectName} ${session.messages.length}개 메시지 요약`);
+    const tracker = this.logger?.apiStart(this.model, `${projectName} ${keptCount}/${originalCount}개 메시지 요약`);
     let text: string;
     try {
       const result = await geminiModel.generateContent(prompt);
