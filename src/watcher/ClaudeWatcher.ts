@@ -4,9 +4,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { JsonlParser } from '../parser/JsonlParser';
+import type { ParsedMessage } from '../parser/types';
 import { ProcessedState } from '../state/ProcessedState';
 import { GeminiSummarizer } from '../summarizer/GeminiSummarizer';
 import { ClaudeCLISummarizer } from '../summarizer/ClaudeCLISummarizer';
+import { buildPreviousContextSection } from '../summarizer/summaryUtils';
 import { VaultIndex } from '../vault/VaultIndex';
 import { LinkMatcher } from '../vault/LinkMatcher';
 import { NoteWriter } from '../vault/NoteWriter';
@@ -16,6 +18,7 @@ import type { StatusBar } from '../ui/StatusBar';
 import type { Logger } from '../ui/Logger';
 
 const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
+
 function isSubagentFile(filePath: string): boolean {
   return filePath.includes('/subagents/') || filePath.includes('\\subagents\\');
 }
@@ -37,6 +40,8 @@ export class ClaudeWatcher implements vscode.Disposable {
   private noteWriter = new NoteWriter();
   private fileLock = new FileLock();
   private inFlight = new Set<string>();
+  /** Set while processCurrent() batch is running to pause the scheduler */
+  private batchInProgress = false;
 
   constructor(
     private config: Config,
@@ -103,6 +108,7 @@ export class ClaudeWatcher implements vscode.Disposable {
 
   private onFileAdd(newFilePath: string): void {
     if (!this.config.enabled) return;
+    if (this.isExcludedProject(newFilePath)) return;
 
     // New file = new session started — add sibling files to dirty set for next slot
     const projectDir = path.dirname(newFilePath);
@@ -115,6 +121,7 @@ export class ClaudeWatcher implements vscode.Disposable {
 
   private onFileChange(filePath: string): void {
     if (!this.config.enabled) return;
+    if (this.isExcludedProject(filePath)) return;
     this.dirtyFiles.add(filePath);
   }
 
@@ -131,6 +138,16 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   private async runScheduled(): Promise<void> {
+    // Don't run while processCurrent() batch is in progress
+    if (this.batchInProgress) return;
+
+    // Periodic GC: remove state entries for deleted .jsonl files (at most once per day)
+    if (this.state.needsGc()) {
+      await this.state.gcStaleEntries().catch((err: unknown) => {
+        this.logger?.warn('GC 실패', { 오류: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     const files = Array.from(this.dirtyFiles);
     this.dirtyFiles.clear();
     if (files.length > 0) {
@@ -253,10 +270,25 @@ export class ClaudeWatcher implements vscode.Disposable {
           return;
         }
 
-        const alreadyProcessed = this.state.getProcessedMessageCount(filePath);
-        const newMessages = session.messages.slice(alreadyProcessed);
+        // UUID-based incremental slicing (falls back to count-based if UUID not found)
+        let newMessages: ParsedMessage[];
+        const lastUuid = this.state.getLastProcessedUuid(filePath);
+        if (lastUuid) {
+          const lastIdx = session.messages.findIndex(m => m.uuid === lastUuid);
+          if (lastIdx >= 0) {
+            newMessages = session.messages.slice(lastIdx + 1);
+          } else {
+            // UUID not found — possible /compact rewrite; fall back to count
+            this.logger?.warn('마지막 처리 UUID 없음, count 기반 폴백', { project });
+            newMessages = session.messages.slice(this.state.getProcessedMessageCount(filePath));
+          }
+        } else {
+          newMessages = session.messages.slice(this.state.getProcessedMessageCount(filePath));
+        }
 
         if (newMessages.length < this.config.minMessages) {
+          // Mark as skipped so next batch run won't re-parse unchanged file
+          await this.state.markSkipped(filePath, stat.mtimeMs);
           this.statusBar.setIdle();
           if (manual) {
             vscode.window.showInformationMessage(
@@ -293,7 +325,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         await this.state.clearSiblingPendingContext(filePath);
 
         const conversationText = newMessages
-          .map((m, i) => `[${alreadyProcessed + i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
+          .map((m, i) => `[${this.state.getProcessedMessageCount(filePath) + i}] ${m.role === 'user' ? 'User' : 'Claude'}: ${m.content}`)
           .join('\n\n');
 
         const sessionWithNewMessages = {
@@ -307,8 +339,10 @@ export class ClaudeWatcher implements vscode.Disposable {
           : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
 
+        const lastMsg = session.messages[session.messages.length - 1];
+
         if (summaries.length === 0) {
-          await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, []);
+          await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, [], lastMsg?.uuid);
           this.statusBar.setIdle();
           this.logger?.info('문서화 대상 없음', { project });
           if (manual) {
@@ -348,7 +382,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           notePaths.push(notePath);
         }
 
-        await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths);
+        await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, notePaths, lastMsg?.uuid);
 
         if (this.logger) {
           this.logger.stats.filesProcessed++;
@@ -356,7 +390,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           this.logger.info('노트 생성 완료', {
             project,
             개수: notePaths.length,
-            파일: notePaths.map(p => path.basename(p)),
+            파일: notePaths.map(p => path.basename(p)).join(', '),
           });
         }
 
@@ -370,13 +404,13 @@ export class ClaudeWatcher implements vscode.Disposable {
           `SecondBrain: ${label}`,
           'Open Note'
         );
-        if (action === 'Open Note') {
+        if (action === 'Open Note' && notePaths[0]) {
           const uri = vscode.Uri.file(notePaths[0]);
           await vscode.commands.executeCommand('vscode.open', uri);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.logger?.error('처리 오류', { project, 오류: msg });
+        this.logger?.error('처리 실패', { project, 오류: msg });
         this.statusBar.setError(msg);
         vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
       }
@@ -385,41 +419,94 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
   }
 
-  /** Process only the most recently modified JSONL file (current session) */
+  /**
+   * Process all new conversations across ALL projects (global incremental).
+   * Only files with content newer than the last processed state are included.
+   */
   async processCurrent(): Promise<void> {
     if (!fs.existsSync(CLAUDE_PROJECTS_PATH)) {
       vscode.window.showWarningMessage('SecondBrain: ~/.claude/projects 폴더를 찾을 수 없습니다.');
       return;
     }
 
-    const wsFolder = vscode.workspace.workspaceFolders?.[0];
-    let searchDir = CLAUDE_PROJECTS_PATH;
-    if (wsFolder) {
-      const encoded = wsFolder.uri.fsPath.replace(/:/g, '-').replace(/[\\/]/g, '-');
-      searchDir = path.join(CLAUDE_PROJECTS_PATH, encoded);
+    // Collect all candidate files with their mtimes
+    const candidates: Array<{ filePath: string; mtime: number }> = [];
+    for (const filePath of findJsonlFiles(CLAUDE_PROJECTS_PATH)) {
+      if (isSubagentFile(filePath)) continue;
+      if (this.isExcludedProject(filePath)) continue;
+      try {
+        const mtime = fs.statSync(filePath).mtimeMs;
+        if (this.state.shouldProcess(filePath, mtime)) {
+          candidates.push({ filePath, mtime });
+        }
+      } catch {
+        // file disappeared
+      }
     }
 
-    const files = findJsonlFiles(searchDir).filter(f => !isSubagentFile(f));
-    if (files.length === 0) {
-      vscode.window.showWarningMessage('SecondBrain: 대화 파일(.jsonl)이 없습니다.');
+    if (candidates.length === 0) {
+      vscode.window.showInformationMessage('SecondBrain: 처리할 신규 대화가 없습니다.');
       return;
     }
 
-    let latest = files[0];
-    let latestMtime = fs.statSync(latest).mtimeMs;
-    for (let i = 1; i < files.length; i++) {
-      const mtime = fs.statSync(files[i]).mtimeMs;
-      if (mtime > latestMtime) { latest = files[i]; latestMtime = mtime; }
+    // Sort oldest-first so previousContext chains build correctly
+    candidates.sort((a, b) => a.mtime - b.mtime);
+
+    this.batchInProgress = true;
+    let processed = 0;
+    let cancelled = false;
+
+    try {
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'SecondBrain: 신규 대화 처리 중',
+        cancellable: true,
+      }, async (progress, token) => {
+        token.onCancellationRequested(() => { cancelled = true; });
+
+        for (const { filePath } of candidates) {
+          if (cancelled || token.isCancellationRequested) break;
+
+          this.dirtyFiles.delete(filePath);
+          progress.report({
+            message: `(${processed + 1}/${candidates.length}) ${path.basename(path.dirname(filePath))}`,
+            increment: 100 / candidates.length,
+          });
+
+          try {
+            await this.processFile(filePath, true, false);
+          } catch (e) {
+            this.logger?.error('배치 처리 오류', {
+              project: projectFromPath(filePath),
+              오류: e instanceof Error ? e.message : String(e),
+            });
+          }
+
+          processed++;
+        }
+      });
+    } finally {
+      this.batchInProgress = false;
+      // Drain any dirty files that accumulated during the batch
+      void this.runScheduled();
     }
 
-    // Remove from dirty set so scheduler doesn't double-process
-    this.dirtyFiles.delete(latest);
+    const remaining = candidates.length - processed;
+    if (cancelled && remaining > 0) {
+      vscode.window.showInformationMessage(
+        `SecondBrain: ${processed}개 처리 완료. 나머지 ${remaining}개는 다음 스케줄에 처리됩니다.`
+      );
+    } else if (processed > 0) {
+      this.logger?.printStats();
+    }
+  }
 
-    vscode.window.showInformationMessage(
-      `SecondBrain: 처리 시작 — ${path.basename(path.dirname(latest))}`
-    );
-
-    await this.processFile(latest, true, false);
+  /** Returns true if the file path matches any excludeProjects pattern */
+  private isExcludedProject(filePath: string): boolean {
+    const excludes = this.config.excludeProjects;
+    if (excludes.length === 0) return false;
+    const normalized = filePath.replace(/\\/g, '/');
+    return excludes.some(pattern => normalized.includes(pattern));
   }
 
   dispose(): void {
@@ -455,19 +542,22 @@ function resolveProjectName(session: { projectPath: string }): string {
   return path.basename(session.projectPath) || 'unknown-project';
 }
 
+/**
+ * Load previous note context using only Summary, Decisions, and Insights sections.
+ * Applies a 2KB cap to prevent token bloat.
+ */
 function loadPreviousContext(noteFiles: string[]): string | undefined {
-  const parts: string[] = [];
+  const contents: string[] = [];
   for (const filePath of noteFiles) {
     try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      // Strip ## Full Conversation section and everything after it
-      const stripped = content.replace(/^## Full Conversation[\s\S]*/m, '').trim();
-      if (stripped) parts.push(stripped);
+      contents.push(fs.readFileSync(filePath, 'utf-8'));
     } catch {
       // File may have been deleted — skip
     }
   }
-  return parts.length > 0 ? parts.join('\n\n---\n\n') : undefined;
+  if (contents.length === 0) return undefined;
+  const result = buildPreviousContextSection(contents);
+  return result || undefined;
 }
 
 function findJsonlFiles(dir: string): string[] {

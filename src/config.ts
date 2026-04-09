@@ -37,6 +37,10 @@ export class Config {
     return this.cfg.get<string>('claudeCliBinary') ?? 'claude';
   }
 
+  get excludeProjects(): string[] {
+    return this.cfg.get<string[]>('excludeProjects') ?? [];
+  }
+
   async setEnabled(value: boolean): Promise<void> {
     await this.cfg.update('enabled', value, vscode.ConfigurationTarget.Global);
   }

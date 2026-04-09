@@ -26,7 +26,7 @@
       },
       {
         "command": "secondbrain.processCurrent",
-        "title": "SecondBrain: Process Current Session"
+        "title": "SecondBrain: Process All New Conversations"
       },
       {
         "command": "secondbrain.enable",
@@ -98,6 +98,12 @@
           "type": "string",
           "default": "claude",
           "description": "Claude CLI 바이너리 경로 (기본: 자동 감지. nvm/Windows 환경에서도 자동으로 찾습니다. 감지 실패 시 절대 경로 직접 입력)"
+        },
+        "secondbrain.excludeProjects": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "제외할 프로젝트 경로 목록 (경로의 일부 또는 basename). 예: ['secret-project', '/Users/me/private']. 매칭되는 프로젝트는 자동 처리 및 전체 처리 모두에서 제외됩니다."
         }
       }
     }

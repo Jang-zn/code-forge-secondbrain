@@ -14,14 +14,19 @@ export class ClaudeCLISummarizer implements Summarizer {
     private logger?: Logger
   ) {}
 
-  private static readonly MAX_MSG_CHARS = 2000;
+  private static readonly MAX_MSG_CHARS = 4000;
   private static readonly TIMEOUT_MS = 5 * 60 * 1000; // 5분
 
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
-    const { text: conversationText, originalCount, keptCount } = compressMessages(
+    const { text: conversationText, originalCount, keptCount, fallback } = compressMessages(
       session.messages,
       ClaudeCLISummarizer.MAX_MSG_CHARS,
     );
+
+    if (fallback) {
+      const projectName = path.basename(session.projectPath) || 'unknown';
+      this.logger?.warn('필터 과도, 원본 fallback 사용', { project: projectName, 원본: originalCount });
+    }
 
     const prompt = buildSummaryPrompt(session, conversationText, previousContext);
 

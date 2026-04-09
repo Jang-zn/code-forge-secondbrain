@@ -19,13 +19,23 @@ export class GeminiSummarizer implements Summarizer {
   }
 
   async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
-    const { text: conversationText, originalCount, keptCount } = compressMessages(session.messages);
+    const { text: conversationText, originalCount, keptCount, fallback } = compressMessages(session.messages);
+
+    if (fallback) {
+      const projectName = path.basename(session.projectPath) || 'unknown';
+      this.logger?.warn('필터 과도, 원본 fallback 사용', { project: projectName, 원본: originalCount });
+    }
 
     const prompt = buildSummaryPrompt(session, conversationText, previousContext);
 
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(this.apiKey);
-    const geminiModel = genAI.getGenerativeModel({ model: this.model });
+    const geminiModel = genAI.getGenerativeModel({
+      model: this.model,
+      generationConfig: {
+        responseMimeType: 'application/json',
+      },
+    });
 
     const projectName = path.basename(session.projectPath) || 'unknown';
     const tracker = this.logger?.apiStart(this.model, `${projectName} ${keptCount}/${originalCount}개 메시지 요약`);

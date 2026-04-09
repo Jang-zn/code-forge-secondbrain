@@ -1,20 +1,29 @@
+export interface ToolCallDigest {
+  name: string;
+  inputDigest: string;
+  resultDigest?: string;
+  isError?: boolean;
+}
+
 export interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: string;
+  uuid?: string;
+  toolCalls?: ToolCallDigest[];
 }
 
 export interface ParsedSession {
   sessionId: string;
-  projectPath: string;       // cwd from first record
+  projectPath: string;
   gitBranch: string | undefined;
   slug: string | undefined;
-  firstTimestamp: string;    // ISO string
-  lastTimestamp: string;     // ISO string
+  firstTimestamp: string;
+  lastTimestamp: string;
   messages: ParsedMessage[];
-  toolUses: string[];        // distinct tool names used
-  filePath: string;          // absolute path to the .jsonl file
-  mtime: number;             // file mtime in ms
+  toolUses: string[];
+  filePath: string;
+  mtime: number;
 }
 
 // Raw JSONL record shapes
