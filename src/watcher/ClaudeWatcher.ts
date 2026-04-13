@@ -25,9 +25,21 @@ function isSubagentFile(filePath: string): boolean {
 
 /** ~/.claude/projects/<encoded-project-path>/<file>.jsonl 에서 프로젝트명 추출 */
 function projectFromPath(filePath: string): string {
-  const parts = filePath.split(path.sep);
+  // chokidar는 Windows에서도 forward slash를 반환할 수 있으므로 양쪽 구분자로 split
+  const parts = filePath.split(/[\\/]/);
   const projectsIdx = parts.lastIndexOf('projects');
   return (projectsIdx >= 0 && parts[projectsIdx + 1]) ? parts[projectsIdx + 1] : path.basename(path.dirname(filePath));
+}
+
+/**
+ * fsPath를 Claude CLI의 projects 폴더 인코딩 방식으로 변환.
+ * / \ → -, : 제거, 결과가 -로 시작하지 않으면 앞에 - 추가.
+ * 예: "/Users/jang/projects/my-app" → "-Users-jang-projects-my-app"
+ * 예: "C:\Users\user\projects\my-app" → "-C-Users-user-projects-my-app"
+ */
+function encodePathForClaude(fsPath: string): string {
+  const normalized = fsPath.replace(/:/g, '').replace(/[/\\]/g, '-');
+  return normalized.startsWith('-') ? normalized : '-' + normalized;
 }
 
 export class ClaudeWatcher implements vscode.Disposable {
@@ -365,7 +377,7 @@ export class ClaudeWatcher implements vscode.Disposable {
 
         await this.vaultIndex.refresh(this.config.vaultPath);
         const linkMatcher = new LinkMatcher(this.vaultIndex);
-        const projectName = resolveProjectName(session);
+        const projectName = resolveProjectName(session, filePath);
 
         const notePaths: string[] = [];
         for (const summary of summaries.filter(s => !s.incomplete)) {
@@ -529,17 +541,35 @@ function msUntilNextSlot(): number {
   return (targetMinute - minutes) * 60_000 - seconds * 1000 - ms;
 }
 
-function resolveProjectName(session: { projectPath: string }): string {
-  const wsFolder = vscode.workspace.workspaceFolders?.[0];
-  if (wsFolder) {
-    const wsPath = wsFolder.uri.fsPath;
-    const normalize = (p: string) => path.normalize(p).toLowerCase();
-    if (normalize(session.projectPath).startsWith(normalize(wsPath))) {
+function resolveProjectName(session: { projectPath: string }, filePath?: string): string {
+  const normalize = (p: string) => path.normalize(p).toLowerCase();
+
+  // 1. cwd를 사용할 수 있을 때: workspace 폴더 경로 매칭 후 basename
+  if (session.projectPath) {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (wsFolder && normalize(session.projectPath).startsWith(normalize(wsFolder.uri.fsPath))) {
       return wsFolder.name;
     }
+    const fromCwd = path.basename(session.projectPath);
+    if (fromCwd) return fromCwd;
   }
 
-  return path.basename(session.projectPath) || 'unknown-project';
+  // 2. cwd가 없을 때(Windows 버그 등): 인코딩된 JSONL 폴더명을 workspace 폴더와 직접 비교
+  if (filePath) {
+    const encodedFolder = projectFromPath(filePath);
+    const wsFolders = vscode.workspace.workspaceFolders ?? [];
+    for (const folder of wsFolders) {
+      if (encodePathForClaude(folder.uri.fsPath).toLowerCase() === encodedFolder.toLowerCase()) {
+        return folder.name;
+      }
+    }
+    // 최후 fallback: 인코딩 폴더명 전체를 식별자로 사용 (앞의 - 제거)
+    // 하이픈이 포함된 프로젝트명 분리 불가 문제를 피하고, 프로젝트 간 충돌 방지
+    const fallback = encodedFolder.replace(/^-+/, '');
+    if (fallback) return fallback;
+  }
+
+  return 'unknown-project';
 }
 
 /**

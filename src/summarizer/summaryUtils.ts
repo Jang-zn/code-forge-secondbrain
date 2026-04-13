@@ -28,6 +28,8 @@ codeChanges와 investigation 작성 시 이 태그의 파일 경로와 결과를
 새로운 대화 내용:
 ${conversationText}
 
+**언어 규칙: 대화가 어떤 언어(영어 포함)로 되어 있어도 summary, investigation, decisionRationale, decisions, codeChanges, insights 필드는 반드시 한국어로 작성하세요. keyTopics만 영문 기술명을 사용합니다.**
+
 중요 지시사항:
 - 문서화 기준: 아래 사이클이 완성된 대화만 노트로 만드세요.
   • 일반: 사용자의 문제 제기 → 해결방안 제시 및 구체화/빌드업 → 해결방안 실행
