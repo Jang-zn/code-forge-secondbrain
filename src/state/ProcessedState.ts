@@ -20,7 +20,6 @@ interface StateData {
   lastGcAt?: string;
 }
 
-const STATE_LOCK_KEY = path.join(os.homedir(), '.vsc-secondbrain', '__state_lock__');
 const PENDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const GC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
 
@@ -28,12 +27,13 @@ export class ProcessedState {
   private stateDir: string;
   private stateFile: string;
   private data: StateData;
-  private stateLock = new FileLock();
+  private stateLock: FileLock;
 
-  constructor() {
-    this.stateDir = path.join(os.homedir(), '.vsc-secondbrain');
+  constructor(stateDir?: string) {
+    this.stateDir = stateDir ?? path.join(os.homedir(), '.vsc-secondbrain');
     fs.mkdirSync(this.stateDir, { recursive: true });
     this.stateFile = path.join(this.stateDir, 'state.json');
+    this.stateLock = new FileLock(path.join(this.stateDir, 'locks'));
     this.data = this.load();
   }
 
@@ -70,8 +70,9 @@ export class ProcessedState {
 
   /** Acquire state lock with up to 3 retries; warns if all fail instead of silently dropping */
   private async withStateLock(mutate: (data: StateData) => void, context?: string): Promise<void> {
+    const stateLockKey = path.join(this.stateDir, '__state_lock__');
     for (let attempt = 0; attempt < 3; attempt++) {
-      const locked = await this.stateLock.acquire(STATE_LOCK_KEY, 5_000);
+      const locked = await this.stateLock.acquire(stateLockKey, 5_000);
       if (locked) {
         try {
           const fresh = this.load();
@@ -79,7 +80,7 @@ export class ProcessedState {
           this.data = fresh;
           this.save();
         } finally {
-          this.stateLock.release(STATE_LOCK_KEY);
+          this.stateLock.release(stateLockKey);
         }
         return;
       }

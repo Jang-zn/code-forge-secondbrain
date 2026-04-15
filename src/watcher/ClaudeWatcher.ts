@@ -16,6 +16,7 @@ import { FileLock } from '../state/FileLock';
 import type { Config, ApiKeyManager } from '../config';
 import type { StatusBar } from '../ui/StatusBar';
 import type { Logger } from '../ui/Logger';
+import type { Summarizer } from '../summarizer/types';
 
 const CLAUDE_PROJECTS_PATH = path.join(os.homedir(), '.claude', 'projects');
 
@@ -60,9 +61,11 @@ export class ClaudeWatcher implements vscode.Disposable {
     private apiKeyManager: ApiKeyManager,
     private statusBar: StatusBar,
     private logger?: Logger,
-    private resolvedBinary?: string
+    private resolvedBinary?: string,
+    private summarizerFactory?: (config: Config, apiKey?: string) => Summarizer,
+    stateDir?: string,
   ) {
-    this.state = new ProcessedState();
+    this.state = new ProcessedState(stateDir);
   }
 
   async start(): Promise<void> {
@@ -369,9 +372,11 @@ export class ClaudeWatcher implements vscode.Disposable {
           firstTimestamp: newMessages[0]?.timestamp ?? session.firstTimestamp,
         };
         const claudeBinary = this.resolvedBinary ?? this.config.claudeCliBinary;
-        const summarizer = provider === 'claude-cli'
-          ? new ClaudeCLISummarizer(claudeBinary, this.config.claudeCliModel, this.logger)
-          : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
+        const summarizer = this.summarizerFactory
+          ? this.summarizerFactory(this.config, apiKey)
+          : provider === 'claude-cli'
+            ? new ClaudeCLISummarizer(claudeBinary, this.config.claudeCliModel, this.logger)
+            : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
         const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext, signal);
 
         const lastMsg = session.messages[session.messages.length - 1];
