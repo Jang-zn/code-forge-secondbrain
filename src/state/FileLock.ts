@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 
-const LOCKS_DIR = path.join(os.homedir(), '.vsc-secondbrain', 'locks');
+const DEFAULT_LOCKS_DIR = path.join(os.homedir(), '.vsc-secondbrain', 'locks');
 const STALE_THRESHOLD_MS = 360_000;
 const RETRY_INTERVAL_MS = 200;
 const GRACE_PERIOD_MS = 5_000;
@@ -19,9 +19,11 @@ function sleep(ms: number): Promise<void> {
 
 export class FileLock {
   private heldLocks = new Set<string>();
+  private locksDir: string;
 
-  constructor() {
-    fs.mkdirSync(LOCKS_DIR, { recursive: true });
+  constructor(locksDir?: string) {
+    this.locksDir = locksDir ?? DEFAULT_LOCKS_DIR;
+    fs.mkdirSync(this.locksDir, { recursive: true });
   }
 
   async acquire(filePath: string, timeoutMs = 30_000): Promise<boolean> {
@@ -68,7 +70,7 @@ export class FileLock {
 
   private lockFileFor(filePath: string): string {
     const hash = crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16);
-    return path.join(LOCKS_DIR, `${hash}.lock`);
+    return path.join(this.locksDir, `${hash}.lock`);
   }
 
   private isStale(lockFile: string): boolean {

@@ -114,14 +114,11 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   private async initializeExistingFiles(watchPath: string): Promise<void> {
-    // watcher가 이미 활성 상태이므로, 초기화 중 들어온 dirtyFiles와 충돌 방지를 위해
-    // 현재 dirtyFiles 스냅샷을 보존하고 해당 파일은 seed 대상에서 제외
-    const alreadyDirty = new Set(this.dirtyFiles);
     const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
     const toProcess: string[] = [];
     for (const filePath of findJsonlFiles(watchPath).filter(f => !isSubagentFile(f))) {
-      // watcher가 이미 감지한 파일은 seed하지 않음 — dirtyFiles가 우선
-      if (alreadyDirty.has(filePath)) continue;
+      // watcher가 이미 감지한 파일은 seed하지 않음 — dirtyFiles가 우선 (매번 실시간 체크)
+      if (this.dirtyFiles.has(filePath)) continue;
       let stat: fs.Stats;
       try { stat = fs.statSync(filePath); } catch { continue; }
       if (!this.state.hasEntry(filePath)) {
@@ -133,11 +130,13 @@ export class ClaudeWatcher implements vscode.Disposable {
         toProcess.push(filePath);
       }
     }
-    await this.state.seedFiles(toSeed);
+    // seedFiles 직전에도 dirty 체크: seed 후보 중 그 사이 dirty가 된 파일 제외
+    const filteredSeed = toSeed.filter(s => !this.dirtyFiles.has(s.filePath));
+    await this.state.seedFiles(filteredSeed);
     for (const filePath of toProcess) {
       this.dirtyFiles.add(filePath);
     }
-    this.logger?.info('초기화 완료', { 등록: toSeed.length, 대기: toProcess.length });
+    this.logger?.info('초기화 완료', { 등록: filteredSeed.length, 대기: toProcess.length });
   }
 
   private onFileAdd(newFilePath: string): void {
@@ -340,9 +339,11 @@ export class ClaudeWatcher implements vscode.Disposable {
           apiKey = await this.apiKeyManager.get();
           if (!apiKey) {
             this.logger?.warn('API 키 미설정으로 처리 중단', { project });
-            vscode.window.showWarningMessage(
-              'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
-            );
+            if (manual) {
+              vscode.window.showWarningMessage(
+                'SecondBrain: Gemini API key not set. Run "SecondBrain: Set Gemini API Key".'
+              );
+            }
             this.statusBar.setIdle();
             return;
           }
@@ -458,7 +459,9 @@ export class ClaudeWatcher implements vscode.Disposable {
         }
         this.logger?.error('처리 실패', { project, 오류: msg });
         this.statusBar.setError(msg);
-        vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
+        if (manual) {
+          vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);
+        }
       }
     } finally {
       this.fileLock.release(filePath);
