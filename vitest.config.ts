@@ -8,6 +8,7 @@ export default defineConfig({
       vscode: path.resolve(__dirname, 'src/__mocks__/vscode.ts'),
     },
     include: ['src/**/*.test.ts'],
+    exclude: ['src/**/*.integration.test.ts'],
   },
   resolve: {
     alias: {
