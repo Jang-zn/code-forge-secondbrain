@@ -114,9 +114,14 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   private async initializeExistingFiles(watchPath: string): Promise<void> {
+    // watcher가 이미 활성 상태이므로, 초기화 중 들어온 dirtyFiles와 충돌 방지를 위해
+    // 현재 dirtyFiles 스냅샷을 보존하고 해당 파일은 seed 대상에서 제외
+    const alreadyDirty = new Set(this.dirtyFiles);
     const toSeed: Array<{ filePath: string; mtime: number; messageCount: number }> = [];
     const toProcess: string[] = [];
     for (const filePath of findJsonlFiles(watchPath).filter(f => !isSubagentFile(f))) {
+      // watcher가 이미 감지한 파일은 seed하지 않음 — dirtyFiles가 우선
+      if (alreadyDirty.has(filePath)) continue;
       let stat: fs.Stats;
       try { stat = fs.statSync(filePath); } catch { continue; }
       if (!this.state.hasEntry(filePath)) {
