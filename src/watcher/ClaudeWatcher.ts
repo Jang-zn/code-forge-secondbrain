@@ -51,7 +51,7 @@ export class ClaudeWatcher implements vscode.Disposable {
   private state: ProcessedState;
   private vaultIndex = new VaultIndex();
   private noteWriter = new NoteWriter();
-  private fileLock = new FileLock();
+  private fileLock: FileLock;
   private inFlight = new Set<string>();
   /** Set while processCurrent() batch is running to pause the scheduler */
   private batchInProgress = false;
@@ -66,6 +66,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     stateDir?: string,
   ) {
     this.state = new ProcessedState(stateDir);
+    this.fileLock = new FileLock(stateDir ? path.join(stateDir, 'locks') : undefined);
   }
 
   async start(): Promise<void> {
