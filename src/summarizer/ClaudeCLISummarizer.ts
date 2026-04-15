@@ -17,7 +17,7 @@ export class ClaudeCLISummarizer implements Summarizer {
   private static readonly MAX_MSG_CHARS = 4000;
   private static readonly TIMEOUT_MS = 5 * 60 * 1000; // 5분
 
-  async summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]> {
+  async summarize(session: ParsedSession, previousContext?: string, signal?: AbortSignal): Promise<SummaryResult[]> {
     const { text: conversationText, originalCount, keptCount, fallback } = compressMessages(
       session.messages,
       ClaudeCLISummarizer.MAX_MSG_CHARS,
@@ -35,7 +35,7 @@ export class ClaudeCLISummarizer implements Summarizer {
 
     let rawText: string;
     try {
-      rawText = await this.spawnClaude(prompt);
+      rawText = await this.spawnClaude(prompt, signal);
     } catch (err) {
       tracker?.fail(err);
       throw err;
@@ -64,7 +64,7 @@ export class ClaudeCLISummarizer implements Summarizer {
     return topics;
   }
 
-  private spawnClaude(prompt: string): Promise<string> {
+  private spawnClaude(prompt: string, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
       const args = [
         '-p',
@@ -75,6 +75,16 @@ export class ClaudeCLISummarizer implements Summarizer {
 
       const { cmd, args: prefixArgs, spawnOpts } = resolveExecutor(this.binary);
       const child = spawn(cmd, [...prefixArgs, ...args], { env: process.env, ...spawnOpts });
+
+      if (signal) {
+        const onAbort = () => {
+          child.kill();
+          reject(new Error('취소됨'));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        // Clean up listener after child exits
+        child.once('close', () => signal.removeEventListener('abort', onAbort));
+      }
 
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];

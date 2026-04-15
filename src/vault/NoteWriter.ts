@@ -38,10 +38,24 @@ export class NoteWriter {
       const fd = fs.openSync(primaryPath, 'wx');
       fs.writeFileSync(fd, content, 'utf-8');
       fs.closeSync(fd);
+      return primaryPath;
     } catch (err: any) {
       if (err.code !== 'EEXIST') throw err;
-      // Already exists (another instance wrote it) — return existing path
     }
+    // Collision: try suffix variants to avoid silently losing data
+    for (let i = 2; i <= 10; i++) {
+      const altPath = path.join(dir, `${baseName}-${i}.md`);
+      try {
+        const fd2 = fs.openSync(altPath, 'wx');
+        fs.writeFileSync(fd2, content, 'utf-8');
+        fs.closeSync(fd2);
+        return altPath;
+      } catch (e2: any) {
+        if (e2.code !== 'EEXIST') throw e2;
+      }
+    }
+    // All suffixes taken — overwrite the primary path as last resort
+    fs.writeFileSync(primaryPath, content, 'utf-8');
     return primaryPath;
   }
 

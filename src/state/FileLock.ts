@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 
 const LOCKS_DIR = path.join(os.homedir(), '.vsc-secondbrain', 'locks');
-const STALE_THRESHOLD_MS = 120_000;
+const STALE_THRESHOLD_MS = 360_000;
 const RETRY_INTERVAL_MS = 200;
 const GRACE_PERIOD_MS = 5_000;
 

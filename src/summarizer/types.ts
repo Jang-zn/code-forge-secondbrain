@@ -15,5 +15,5 @@ export interface SummaryResult {
 }
 
 export interface Summarizer {
-  summarize(session: ParsedSession, previousContext?: string): Promise<SummaryResult[]>;
+  summarize(session: ParsedSession, previousContext?: string, signal?: AbortSignal): Promise<SummaryResult[]>;
 }

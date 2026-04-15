@@ -65,7 +65,17 @@ export class ClaudeWatcher implements vscode.Disposable {
     this.state = new ProcessedState();
   }
 
-  start(): void {
+  async start(): Promise<void> {
+    // 멱등성 보장: 이미 실행 중이면 기존 리소스 정리 후 재시작
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.schedulerTimer) {
+      clearTimeout(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+
     const watchPath = CLAUDE_PROJECTS_PATH;
     if (!fs.existsSync(watchPath)) {
       this.logger?.warn('감시 미시작: ~/.claude/projects 폴더 없음', { 경로: watchPath });
@@ -75,10 +85,12 @@ export class ClaudeWatcher implements vscode.Disposable {
     this.logger?.info('감시 시작', { 경로: watchPath });
 
     // Pre-seed state with all existing files so fresh installs don't bulk-process history
-    this.initializeExistingFiles(watchPath).catch((err: unknown) => {
+    try {
+      await this.initializeExistingFiles(watchPath);
+    } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger?.error('초기화 실패', { 오류: msg });
-    });
+    }
 
     // chokidar glob requires forward slashes even on Windows
     const globPattern = watchPath.replace(/\\/g, '/') + '/**/*.jsonl';
@@ -92,6 +104,9 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.watcher.on('add', (filePath) => this.onFileAdd(filePath));
     this.watcher.on('change', (filePath) => this.onFileChange(filePath));
+    this.watcher.on('error', (err: Error) => {
+      this.logger?.error('파일 감시 오류', { 오류: err.message });
+    });
 
     this.startScheduler();
   }
@@ -173,10 +188,10 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
   }
 
-  async processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
+  async processFile(filePath: string, manual = false, forceReprocess = false, batch = false, signal?: AbortSignal): Promise<void> {
     const project = projectFromPath(filePath);
     if (this.inFlight.has(filePath)) {
-      if (manual) {
+      if (manual && !batch) {
         vscode.window.showInformationMessage('SecondBrain: 이미 처리 중입니다.');
       } else {
         this.logger?.skip('이미 처리 중', { project });
@@ -184,7 +199,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       return;
     }
     if (!this.config.isValid()) {
-      if (manual) {
+      if (manual && !batch) {
         vscode.window.showWarningMessage('SecondBrain: Vault 경로가 설정되지 않았습니다. Setup 명령을 실행하세요.');
       } else {
         this.logger?.skip('Vault 경로 미설정', { project });
@@ -194,19 +209,19 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.inFlight.add(filePath);
     try {
-      await this._processFile(filePath, manual, forceReprocess);
+      await this._processFile(filePath, manual, forceReprocess, batch, signal);
     } finally {
       this.inFlight.delete(filePath);
     }
   }
 
-  private async _processFile(filePath: string, manual = false, forceReprocess = false): Promise<void> {
+  private async _processFile(filePath: string, manual = false, forceReprocess = false, batch = false, signal?: AbortSignal): Promise<void> {
     const project = projectFromPath(filePath);
     let stat: fs.Stats;
     try {
       stat = fs.statSync(filePath);
     } catch {
-      if (manual) {
+      if (manual && !batch) {
         vscode.window.showWarningMessage('SecondBrain: 대화 파일을 읽을 수 없습니다.');
       } else {
         this.logger?.skip('파일 읽기 실패', { project });
@@ -215,7 +230,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
 
     if (!forceReprocess && !this.state.shouldProcess(filePath, stat.mtimeMs)) {
-      if (manual) {
+      if (manual && !batch) {
         vscode.window.showInformationMessage('SecondBrain: 변경된 내용이 없습니다.');
       } else {
         this.logger?.skip('변경 없음', { project });
@@ -224,7 +239,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
 
     if (!(await this.fileLock.acquire(filePath))) {
-      if (manual) {
+      if (manual && !batch) {
         vscode.window.showInformationMessage('SecondBrain: 다른 창에서 처리 중입니다.');
       } else {
         this.logger?.skip('락 점유 중 (다른 창)', { project });
@@ -240,7 +255,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         if (entry?.processedAt) {
           const age = Date.now() - new Date(entry.processedAt).getTime();
           if (age < 30_000) {
-            if (manual) {
+            if (manual && !batch) {
               vscode.window.showInformationMessage('SecondBrain: 최근에 이미 처리되었습니다.');
             } else {
               this.logger?.skip('30초 이내 재처리 방지', { project });
@@ -260,7 +275,7 @@ export class ClaudeWatcher implements vscode.Disposable {
       }
 
       if (!forceReprocess && !this.state.shouldProcess(filePath, stat.mtimeMs)) {
-        if (manual) {
+        if (manual && !batch) {
           vscode.window.showInformationMessage('SecondBrain: 최근에 이미 처리되었습니다.');
         } else {
           this.logger?.skip('변경 없음 (락 후 재확인)', { project });
@@ -274,7 +289,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         const session = this.parser.parse(filePath);
         if (!session) {
           this.statusBar.setIdle();
-          if (manual) {
+          if (manual && !batch) {
             vscode.window.showWarningMessage('SecondBrain: 대화 파일을 파싱할 수 없습니다.');
           } else {
             this.logger?.skip('JSONL 파싱 실패', { project });
@@ -302,7 +317,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           // Mark as skipped so next batch run won't re-parse unchanged file
           await this.state.markSkipped(filePath, stat.mtimeMs);
           this.statusBar.setIdle();
-          if (manual) {
+          if (manual && !batch) {
             vscode.window.showInformationMessage(
               `SecondBrain: 메시지가 너무 적습니다 (${newMessages.length}개, 최소 ${this.config.minMessages}개 필요).`
             );
@@ -349,7 +364,7 @@ export class ClaudeWatcher implements vscode.Disposable {
         const summarizer = provider === 'claude-cli'
           ? new ClaudeCLISummarizer(claudeBinary, this.config.claudeCliModel, this.logger)
           : new GeminiSummarizer(apiKey!, this.config.summaryModel, this.logger);
-        const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext);
+        const summaries = await summarizer.summarize(sessionWithNewMessages, previousContext, signal);
 
         const lastMsg = session.messages[session.messages.length - 1];
 
@@ -357,7 +372,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           await this.state.markProcessed(filePath, stat.mtimeMs, session.messages.length, [], lastMsg?.uuid);
           this.statusBar.setIdle();
           this.logger?.info('문서화 대상 없음', { project });
-          if (manual) {
+          if (manual && !batch) {
             vscode.window.showInformationMessage('SecondBrain: 문서화할 내용이 없는 대화입니다.');
           }
           return;
@@ -369,7 +384,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           await this.state.markPending(filePath, stat.mtimeMs, conversationText);
           this.statusBar.setIdle();
           this.logger?.info('미완료 토픽만 존재, 다음 세션으로 연기', { project, 토픽수: summaries.length });
-          if (manual) {
+          if (manual && !batch) {
             vscode.window.showInformationMessage('SecondBrain: 검토 단계로 판단됨 — 다음 세션과 합쳐서 노트를 생성합니다.');
           }
           return;
@@ -412,13 +427,19 @@ export class ClaudeWatcher implements vscode.Disposable {
         const label = notePaths.length > 1
           ? `${notePaths.length}개 주제로 저장됨`
           : `"${firstTitle}" saved to Obsidian`;
-        const action = await vscode.window.showInformationMessage(
-          `SecondBrain: ${label}`,
-          'Open Note'
-        );
-        if (action === 'Open Note' && notePaths[0]) {
-          const uri = vscode.Uri.file(notePaths[0]);
-          await vscode.commands.executeCommand('vscode.open', uri);
+        if (batch) {
+          void vscode.window.showInformationMessage(`SecondBrain: ${label}`, 'Open Note').then(action => {
+            if (action === 'Open Note' && notePaths[0]) {
+              const uri = vscode.Uri.file(notePaths[0]);
+              void vscode.commands.executeCommand('vscode.open', uri);
+            }
+          });
+        } else {
+          const action = await vscode.window.showInformationMessage(`SecondBrain: ${label}`, 'Open Note');
+          if (action === 'Open Note' && notePaths[0]) {
+            const uri = vscode.Uri.file(notePaths[0]);
+            await vscode.commands.executeCommand('vscode.open', uri);
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -474,7 +495,11 @@ export class ClaudeWatcher implements vscode.Disposable {
         title: 'SecondBrain: 신규 대화 처리 중',
         cancellable: true,
       }, async (progress, token) => {
-        token.onCancellationRequested(() => { cancelled = true; });
+        const abortController = new AbortController();
+        token.onCancellationRequested(() => {
+          cancelled = true;
+          abortController.abort();
+        });
 
         for (const { filePath } of candidates) {
           if (cancelled || token.isCancellationRequested) break;
@@ -486,7 +511,7 @@ export class ClaudeWatcher implements vscode.Disposable {
           });
 
           try {
-            await this.processFile(filePath, true, false);
+            await this.processFile(filePath, true, false, true, abortController.signal);
           } catch (e) {
             this.logger?.error('배치 처리 오류', {
               project: projectFromPath(filePath),
@@ -509,6 +534,9 @@ export class ClaudeWatcher implements vscode.Disposable {
         `SecondBrain: ${processed}개 처리 완료. 나머지 ${remaining}개는 다음 스케줄에 처리됩니다.`
       );
     } else if (processed > 0) {
+      vscode.window.showInformationMessage(
+        `SecondBrain: ${processed}개 대화 처리 완료.`
+      );
       this.logger?.printStats();
     }
   }

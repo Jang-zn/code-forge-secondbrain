@@ -221,10 +221,14 @@ export function activate(context: vscode.ExtensionContext): void {
           watcher.start();
           statusBar?.setIdle();
         });
+      } else {
+        watcher?.dispose();
+        watcher = undefined;
+        statusBar?.setDisabled();
       }
     }),
 
-    watcher,
+    { dispose: () => watcher?.dispose() },
     statusBar,
     logger,
   );
