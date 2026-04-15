@@ -84,17 +84,10 @@ export class ClaudeWatcher implements vscode.Disposable {
 
     this.logger?.info('감시 시작', { 경로: watchPath });
 
-    // Pre-seed state with all existing files so fresh installs don't bulk-process history
-    try {
-      await this.initializeExistingFiles(watchPath);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger?.error('초기화 실패', { 오류: msg });
-    }
-
     // chokidar glob requires forward slashes even on Windows
     const globPattern = watchPath.replace(/\\/g, '/') + '/**/*.jsonl';
 
+    // Watcher를 먼저 시작해서 초기화 중 발생하는 add/change 이벤트를 놓치지 않도록 함
     this.watcher = chokidar.watch(globPattern, {
       ignoreInitial: true,
       ignored: '**/subagents/**',
@@ -107,6 +100,15 @@ export class ClaudeWatcher implements vscode.Disposable {
     this.watcher.on('error', (err: Error) => {
       this.logger?.error('파일 감시 오류', { 오류: err.message });
     });
+
+    // Watcher 활성 후 초기화: seed는 hasEntry 체크로 기존 파일만 처리하므로
+    // watcher가 수집한 dirtyFiles와 충돌하지 않음
+    try {
+      await this.initializeExistingFiles(watchPath);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger?.error('초기화 실패', { 오류: msg });
+    }
 
     this.startScheduler();
   }
@@ -443,6 +445,12 @@ export class ClaudeWatcher implements vscode.Disposable {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        // 사용자 취소는 에러가 아님 — 조용히 중단
+        if (msg === '취소됨') {
+          this.logger?.info('처리 취소됨', { project });
+          this.statusBar.setIdle();
+          return;
+        }
         this.logger?.error('처리 실패', { project, 오류: msg });
         this.statusBar.setError(msg);
         vscode.window.showErrorMessage(`SecondBrain error: ${msg}`);

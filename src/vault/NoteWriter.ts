@@ -43,7 +43,7 @@ export class NoteWriter {
       if (err.code !== 'EEXIST') throw err;
     }
     // Collision: try suffix variants to avoid silently losing data
-    for (let i = 2; i <= 10; i++) {
+    for (let i = 2; i <= 100; i++) {
       const altPath = path.join(dir, `${baseName}-${i}.md`);
       try {
         const fd2 = fs.openSync(altPath, 'wx');
@@ -54,9 +54,8 @@ export class NoteWriter {
         if (e2.code !== 'EEXIST') throw e2;
       }
     }
-    // All suffixes taken — overwrite the primary path as last resort
-    fs.writeFileSync(primaryPath, content, 'utf-8');
-    return primaryPath;
+    // 100회 충돌은 비정상 상태 — 에러 올림
+    throw new Error(`노트 파일명 충돌 해소 실패: ${primaryPath} (100회 초과)`);
   }
 
   private renderNote(opts: NoteWriteOptions, datetime: string): string {
