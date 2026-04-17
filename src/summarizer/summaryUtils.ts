@@ -43,7 +43,7 @@ ${conversationText}
   또한 User 메시지가 \`<teammate-message\`로 시작하는 XML 블록이고 Claude가 대기·준비 선언만 한 경우는 팀 에이전트 내부 초기화 메시지이므로 \`{"topics": []}\`를 반환하세요.
   사이클 완성 판단 시 User의 task description을 "완료된 작업"으로 오해하지 마세요 — Claude가 실제로 그 결과를 제시했는지를 기준으로 판단하세요.
 - **서술형 필드 작성 규칙 (summary, investigation, decisionRationale):**
-  문장마다 줄바꿈(\\n)을 넣으세요. 관련된 2-3문장은 같은 단락으로 묶고, 맥락이 전환될 때 빈 줄(\\n\\n)로 단락을 구분하세요. 벽처럼 이어붙인 텍스트는 금지입니다.
+  문장마다 두 글자 이스케이프 시퀀스 \\n을 문자열 값 안에 삽입하세요. 관련된 2-3문장은 같은 단락으로 묶고, 맥락이 전환될 때 빈 줄 \\n\\n으로 단락을 구분하세요. JSON 문자열 안에 실제 개행 문자(raw newline)를 직접 쓰면 파싱이 깨집니다. 벽처럼 이어붙인 텍스트는 금지입니다.
 
 반드시 단일 JSON 객체만 출력하세요. 다른 텍스트 없이 JSON만 출력하세요.
 다음 JSON 스키마로 응답하세요:
@@ -87,11 +87,18 @@ export function parseSummaryTopics(rawText: string, allIndices: number[], logger
   try {
     const parsed = JSON.parse(jsonText) as { topics: SummaryResult[] };
     topics = Array.isArray(parsed.topics) ? parsed.topics : [];
-  } catch (e) {
-    if (logger) {
-      logger.stats.apiInvalidated++;
+  } catch (firstErr) {
+    // 1차 실패: sanitize 후 재시도
+    try {
+      const sanitized = sanitizeJsonText(jsonText);
+      const parsed = JSON.parse(sanitized) as { topics: SummaryResult[] };
+      topics = Array.isArray(parsed.topics) ? parsed.topics : [];
+    } catch {
+      if (logger) {
+        logger.stats.apiInvalidated++;
+      }
+      throw new Error(`요약 JSON 파싱 실패: ${firstErr instanceof Error ? firstErr.message : String(firstErr)}`);
     }
-    throw new Error(`요약 JSON 파싱 실패: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   return topics.map(t => ({
@@ -111,6 +118,24 @@ export function parseSummaryTopics(rawText: string, allIndices: number[], logger
     decisionRationale: typeof t.decisionRationale === 'string' ? t.decisionRationale : '',
     insights: Array.isArray(t.insights) ? t.insights : [],
   }));
+}
+
+function sanitizeJsonText(text: string): string {
+  let out = '';
+  let inString = false;
+  let escape = false;
+  for (const ch of text) {
+    if (escape) { out += ch; escape = false; continue; }
+    if (ch === '\\') { out += ch; escape = true; continue; }
+    if (ch === '"') { inString = !inString; out += ch; continue; }
+    if (inString) {
+      if (ch === '\n') { out += '\\n'; continue; }
+      if (ch === '\r') { out += '\\r'; continue; }
+      if (ch === '\t') { out += '\\t'; continue; }
+    }
+    out += ch;
+  }
+  return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
 /**

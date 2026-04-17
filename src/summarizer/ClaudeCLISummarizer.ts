@@ -42,26 +42,51 @@ export class ClaudeCLISummarizer implements Summarizer {
     }
 
     // --output-format json wraps the result: { type, subtype, result, ... }
-    let textToParse: string;
-    try {
-      const outer = JSON.parse(rawText) as { result?: string; content?: string };
-      textToParse = (outer.result ?? outer.content ?? rawText).trim();
-    } catch {
-      textToParse = rawText.trim();
-    }
+    const textToParse = this.unwrapClaudeJson(rawText);
 
     let topics: SummaryResult[];
+    const allIndices = session.messages.map((_, i) => i);
     try {
-      const allIndices = session.messages.map((_, i) => i);
       topics = parseSummaryTopics(textToParse, allIndices, this.logger);
-    } catch (e) {
-      tracker?.fail(e);
-      throw e;
+    } catch (firstErr) {
+      // sanitize 재시도도 실패 — 강조 프롬프트로 CLI 1회 재호출
+      const posMatch = firstErr instanceof Error ? firstErr.message.match(/position (\d+)/) : null;
+      const errPos = posMatch ? Number(posMatch[1]) : null;
+      this.logger?.warn('JSON 파싱 실패, CLI 재호출 시도', {
+        project: projectName,
+        오류위치: textToParse.slice(
+          Math.max(0, errPos !== null ? errPos - 100 : 0),
+          Math.min(textToParse.length, errPos !== null ? errPos + 100 : 200),
+        ).replace(/\n/g, '↵'),
+      });
+      let retryText: string;
+      try {
+        const retryPrompt = prompt + '\n\n중요: JSON 문자열 값 내부에 실제 개행 문자를 절대 쓰지 마세요. 반드시 \\n 두 글자로 표현하세요.';
+        retryText = await this.spawnClaude(retryPrompt, signal);
+      } catch {
+        tracker?.fail(firstErr);
+        throw firstErr;
+      }
+      try {
+        topics = parseSummaryTopics(this.unwrapClaudeJson(retryText), allIndices, this.logger);
+      } catch {
+        tracker?.fail(firstErr);
+        throw firstErr;
+      }
     }
 
     const incompleteCount = topics.filter(t => t.incomplete === true).length;
     tracker?.end(`${topics.length}개 토픽 (미완료 ${incompleteCount})`);
     return topics;
+  }
+
+  private unwrapClaudeJson(raw: string): string {
+    try {
+      const outer = JSON.parse(raw) as { result?: string; content?: string };
+      return (outer.result ?? outer.content ?? raw).trim();
+    } catch {
+      return raw.trim();
+    }
   }
 
   private spawnClaude(prompt: string, signal?: AbortSignal): Promise<string> {

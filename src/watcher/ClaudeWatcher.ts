@@ -46,7 +46,9 @@ function encodePathForClaude(fsPath: string): string {
 export class ClaudeWatcher implements vscode.Disposable {
   private watcher: chokidar.FSWatcher | null = null;
   private dirtyFiles = new Set<string>();
-  private schedulerTimer: ReturnType<typeof setTimeout> | null = null;
+  private schedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private lastSlotRun = 0;
   private parser = new JsonlParser();
   private state: ProcessedState;
   private vaultIndex = new VaultIndex();
@@ -76,8 +78,12 @@ export class ClaudeWatcher implements vscode.Disposable {
       this.watcher = null;
     }
     if (this.schedulerTimer) {
-      clearTimeout(this.schedulerTimer);
+      clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
+    }
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
     }
 
     const watchPath = CLAUDE_PROJECTS_PATH;
@@ -115,6 +121,7 @@ export class ClaudeWatcher implements vscode.Disposable {
     }
 
     this.startScheduler();
+    this.startHealthCheck();
   }
 
   private async initializeExistingFiles(watchPath: string): Promise<void> {
@@ -163,15 +170,39 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   private startScheduler(): void {
-    this.logger?.info('스케줄러 시작', { 간격: '20분' });
-    const schedule = () => {
-      const ms = msUntilNextSlot();
-      this.schedulerTimer = setTimeout(async () => {
-        await this.runScheduled();
-        schedule(); // 다음 슬롯 재귀 예약
-      }, ms);
-    };
-    schedule();
+    this.logger?.info('스케줄러 시작', { 방식: 'wall-clock 60초 체크' });
+    this.schedulerTimer = setInterval(() => {
+      if (this.batchInProgress) return;
+      const now = Date.now();
+      const currentSlot = slotBoundary(now);
+      if (currentSlot > this.lastSlotRun) {
+        this.lastSlotRun = currentSlot;
+        void this.runScheduled();
+      }
+    }, 60_000);
+  }
+
+  private startHealthCheck(): void {
+    this.healthTimer = setInterval(() => {
+      if (!this.config.enabled) return;
+      if (this.dirtyFiles.size > 0) return; // watcher already has work queued
+      try {
+        for (const filePath of findJsonlFiles(CLAUDE_PROJECTS_PATH)) {
+          if (isSubagentFile(filePath)) continue;
+          if (this.isExcludedProject(filePath)) continue;
+          try {
+            const mtime = fs.statSync(filePath).mtimeMs;
+            if (this.state.shouldProcess(filePath, mtime)) {
+              this.dirtyFiles.add(filePath);
+            }
+          } catch {
+            // 파일 사라짐, 무시
+          }
+        }
+      } catch (err) {
+        this.logger?.warn('헬스체크 실패', { 오류: err instanceof Error ? err.message : String(err) });
+      }
+    }, 60_000);
   }
 
   private async runScheduled(): Promise<void> {
@@ -190,11 +221,18 @@ export class ClaudeWatcher implements vscode.Disposable {
     if (files.length > 0) {
       this.logger?.info('스케줄러 실행', { 대상파일: files.length });
     }
+    const notesBefore = this.logger?.stats.notesCreated ?? 0;
     for (const filePath of files) {
       await this.processFile(filePath);
     }
     if (files.length > 0) {
       this.logger?.printStats();
+      const notesCreated = (this.logger?.stats.notesCreated ?? 0) - notesBefore;
+      if (notesCreated > 0) {
+        // 스케줄 모드: 요약 토스트 1개 (macOS 번들링 방지)
+        const msg = notesCreated === 1 ? '1개 대화 저장됨' : `${notesCreated}개 대화 저장됨`;
+        void vscode.window.showInformationMessage(`SecondBrain: ${msg}`);
+      }
     }
   }
 
@@ -438,23 +476,18 @@ export class ClaudeWatcher implements vscode.Disposable {
         const firstTitle = summaries.find(s => !s.incomplete)?.title ?? 'Claude 대화';
         this.statusBar.setSuccess(firstTitle);
 
-        const label = notePaths.length > 1
-          ? `${notePaths.length}개 주제로 저장됨`
-          : `"${firstTitle}" saved to Obsidian`;
-        if (batch) {
-          void vscode.window.showInformationMessage(`SecondBrain: ${label}`, 'Open Note').then(action => {
-            if (action === 'Open Note' && notePaths[0]) {
-              const uri = vscode.Uri.file(notePaths[0]);
-              void vscode.commands.executeCommand('vscode.open', uri);
-            }
-          });
-        } else {
+        if (!batch && manual) {
+          // 수동 단일 파일 처리만 개별 토스트
+          const label = notePaths.length > 1
+            ? `${notePaths.length}개 주제로 저장됨`
+            : `"${firstTitle}" saved to Obsidian`;
           const action = await vscode.window.showInformationMessage(`SecondBrain: ${label}`, 'Open Note');
           if (action === 'Open Note' && notePaths[0]) {
             const uri = vscode.Uri.file(notePaths[0]);
             await vscode.commands.executeCommand('vscode.open', uri);
           }
         }
+        // 배치/스케줄 모드: StatusBar + Logger만 (토스트 없음 — macOS 번들링 방지)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // 사용자 취소는 에러가 아님 — 조용히 중단
@@ -556,9 +589,20 @@ export class ClaudeWatcher implements vscode.Disposable {
         `SecondBrain: ${processed}개 처리 완료. 나머지 ${remaining}개는 다음 스케줄에 처리됩니다.`
       );
     } else if (processed > 0) {
-      vscode.window.showInformationMessage(
-        `SecondBrain: ${processed}개 대화 처리 완료.`
+      const allEntries = this.state.getAllEntries();
+      const latestNote = Object.values(allEntries)
+        .filter(e => (e.noteFiles?.length ?? 0) > 0)
+        .sort((a, b) => a.processedAt.localeCompare(b.processedAt))
+        .at(-1)
+        ?.noteFiles.at(-1);
+      const action = await vscode.window.showInformationMessage(
+        `SecondBrain: ${processed}개 대화 처리 완료.`,
+        ...(latestNote ? ['Open Latest Note'] : []),
       );
+      if (action === 'Open Latest Note' && latestNote) {
+        const uri = vscode.Uri.file(latestNote);
+        await vscode.commands.executeCommand('vscode.open', uri);
+      }
       this.logger?.printStats();
     }
   }
@@ -572,23 +616,21 @@ export class ClaudeWatcher implements vscode.Disposable {
   }
 
   dispose(): void {
-    if (this.schedulerTimer) clearTimeout(this.schedulerTimer);
+    if (this.schedulerTimer) { clearInterval(this.schedulerTimer); this.schedulerTimer = null; }
+    if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null; }
     this.fileLock.releaseAll();
     this.watcher?.close();
   }
 }
 
-/** Returns milliseconds until next :00, :20, or :40 slot */
-function msUntilNextSlot(): number {
-  const now = new Date();
-  const minutes = now.getMinutes();
-  const seconds = now.getSeconds();
-  const ms = now.getMilliseconds();
-  let targetMinute: number;
-  if (minutes < 20) targetMinute = 20;
-  else if (minutes < 40) targetMinute = 40;
-  else targetMinute = 60; // next hour :00
-  return (targetMinute - minutes) * 60_000 - seconds * 1000 - ms;
+/** 주어진 시각 기준으로 가장 최근 :00/:20/:40 슬롯의 절대 타임스탬프(ms) 반환 */
+function slotBoundary(nowMs: number): number {
+  const d = new Date(nowMs);
+  const minutes = d.getMinutes();
+  const bucket = minutes < 20 ? 0 : minutes < 40 ? 20 : 40;
+  const result = new Date(d);
+  result.setMinutes(bucket, 0, 0);
+  return result.getTime();
 }
 
 function resolveProjectName(session: { projectPath: string }, filePath?: string): string {

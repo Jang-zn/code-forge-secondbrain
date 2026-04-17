@@ -35,10 +35,12 @@ export class StatusBar implements vscode.Disposable {
     this.item.color = undefined;
   }
 
-  setSuccess(title: string): void {
+  setSuccess(title: string, count = 1): void {
     this.clearPendingTimer();
-    this.item.text = `$(check) SecondBrain`;
-    this.item.tooltip = `SecondBrain: Saved "${title}"`;
+    this.item.text = count > 1 ? `$(check) SecondBrain: ${count}개` : `$(check) SecondBrain`;
+    this.item.tooltip = count > 1
+      ? `SecondBrain: ${count}개 저장됨 (마지막: "${title}")`
+      : `SecondBrain: Saved "${title}"`;
     this.item.color = new vscode.ThemeColor('statusBarItem.prominentForeground');
 
     // Auto-revert to idle after 5s
